@@ -369,7 +369,11 @@ class RecommendationViewSet(viewsets.ModelViewSet):
         """GET /api/recommendations/ - Get recommendations (with optional refresh)."""
         refresh = request.query_params.get('refresh', 'false').lower() == 'true'
         
-        if refresh:
+        # Check if recommendations exist
+        has_recommendations = Recommendation.objects.filter(customer=request.user).exists()
+        
+        # Generate if forced refresh OR if no recommendations exist (Cold Start fix)
+        if refresh or not has_recommendations:
             self._generate_recommendations(request.user)
 
         recommendations = Recommendation.objects.filter(
@@ -382,9 +386,23 @@ class RecommendationViewSet(viewsets.ModelViewSet):
         """Generate new recommendations using ML recommender."""
         try:
             from products.ml_recommender import get_recommender
+            from products.models import Product  # Fallback import
+            
             recommender = get_recommender()
             recommendations = recommender.recommend(user, top_n=10)
             
+            # FALLBACK: If ML returns empty (Cold User), show popular/random products
+            if not recommendations:
+                # Fallback to recent products
+                fallback_products = Product.objects.all().order_by('-id')[:10]
+                recommendations = []
+                for p in fallback_products:
+                    recommendations.append({
+                        'product_id': p.id,
+                        'score': 0.5,
+                        'reason': 'Popüler Ürünler'
+                    })
+
             # Clear old and create new
             Recommendation.objects.filter(customer=user).delete()
             

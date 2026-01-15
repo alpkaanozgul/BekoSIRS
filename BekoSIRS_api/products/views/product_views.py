@@ -24,8 +24,54 @@ class ProductViewSet(viewsets.ModelViewSet):
             return [AllowAny()]
         return [IsAuthenticated()]
 
+        return queryset
+
     def get_queryset(self):
-        return Product.objects.all().select_related("category")
+        """
+        Filter products by search query and category.
+        Search looks in: name, brand, description, category name, model code
+        """
+        from django.db.models import Q
+        from django.utils import timezone
+        
+        # Import dynamically to avoid circular usage if model is in same app
+        from products.models import SearchHistory
+        
+        queryset = Product.objects.all().select_related("category")
+        
+        # Search filter
+        search_query = self.request.query_params.get('search', None)
+        if search_query:
+            search_query = search_query.strip()
+            queryset = queryset.filter(
+                Q(name__icontains=search_query) |
+                Q(brand__icontains=search_query) |
+                Q(description__icontains=search_query) |
+                Q(category__name__icontains=search_query) |
+                Q(model_code__icontains=search_query)
+            )
+            
+            # Record search history for logged-in customers
+            user = self.request.user
+            if user.is_authenticated and hasattr(user, 'role') and user.role == 'customer':
+                try:
+                    # Avoid duplicate logging if recent search exists (e.g. 5 minutes)
+                    last_search = SearchHistory.objects.filter(
+                        customer=user, 
+                        query__iexact=search_query
+                    ).order_by('-created_at').first()
+                    
+                    if not last_search or (timezone.now() - last_search.created_at).seconds > 300:
+                        SearchHistory.objects.create(customer=user, query=search_query)
+                except Exception as e:
+                    print(f"Search history error: {e}")
+        
+        # Category filter
+        category = self.request.query_params.get('category', None)
+        if category:
+            queryset = queryset.filter(category_id=category)
+        
+        return queryset
 
     @action(
         detail=False,

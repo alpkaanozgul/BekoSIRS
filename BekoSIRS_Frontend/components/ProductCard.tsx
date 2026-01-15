@@ -5,7 +5,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { Image } from 'expo-image';
 import { FontAwesome } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { wishlistAPI, viewHistoryAPI } from '../services/api';
+import { wishlistAPI, viewHistoryAPI, getImageUrl } from '../services/api';
 
 interface ProductCardProps {
   product: {
@@ -37,7 +37,7 @@ export const ProductCard = memo(({
   const [inWishlist, setInWishlist] = useState(initialInWishlist);
   const [loading, setLoading] = useState(false);
 
-  const imageSource = product.image_url || product.image;
+  const imageSource = getImageUrl(product.image_url || product.image);
 
   useEffect(() => {
     setInWishlist(initialInWishlist || false);

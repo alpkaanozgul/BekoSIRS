@@ -52,6 +52,20 @@ class ProductSerializer(serializers.ModelSerializer):
             "campaign_tag"
         ]
 
+    def to_representation(self, instance):
+        """
+        Görsel alanı bir URL ise (http/https ile başlıyorsa), 
+        Django'nun otomatik eklediği media url prefixini kaldır ve orijinal URL'i döndür.
+        """
+        representation = super().to_representation(instance)
+        try:
+            # instance.image bir FieldFile objesidir. instance.image.name veritabanındaki raw stringi verir.
+            if instance.image and str(instance.image.name).startswith(('http', 'https')):
+                representation['image'] = instance.image.name
+        except Exception:
+            pass
+        return representation
+
 
 # ---------------------------
 # User Serializers (Kullanıcı Listeleme ve Arama)

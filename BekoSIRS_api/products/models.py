@@ -198,6 +198,26 @@ class UserActivity(models.Model):
         return f"{self.user.username} - {self.activity_type} - {self.product.name}"
 
 
+class SearchHistory(models.Model):
+    """Kullanıcı arama geçmişi (Öneri sistemi için)."""
+    customer = models.ForeignKey(
+        CustomUser, 
+        on_delete=models.CASCADE, 
+        related_name='search_history',
+        limit_choices_to={'role': 'customer'}
+    )
+    query = models.CharField(max_length=255, verbose_name="Arama Terimi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Arama Geçmişi"
+        verbose_name_plural = "Arama Geçmişleri"
+
+    def __str__(self):
+        return f"{self.customer.username} searched '{self.query}'"
+
+
 # -------------------------------
 # 🔹 Wishlist (İstek Listesi)
 # -------------------------------

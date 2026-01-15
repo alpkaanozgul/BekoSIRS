@@ -294,4 +294,26 @@ export const locationAPI = {
   getAreas: (districtId: number) => api.get(`api/v1/locations/areas/?district=${districtId}`),
 };
 
+// ----------------------------------------
+// 🔹 IMAGE URL HELPER
+// ----------------------------------------
+/**
+ * Get full image URL from path.
+ * Handles both full URLs (http/https) and relative paths.
+ */
+export const getImageUrl = (imagePath: string | null | undefined): string | null => {
+  if (!imagePath) return null;
+
+  // 1. If it's already a full URL, return it as is
+  if (imagePath.startsWith('http') || imagePath.startsWith('https')) {
+    return imagePath;
+  }
+
+  // 2. If it's a relative path (e.g., "/media/products/img.jpg"), prepend backend URL
+  const baseUrl = (api.defaults.baseURL || '').replace(/\/$/, '');
+  const cleanPath = imagePath.startsWith('/') ? imagePath : `/${imagePath}`;
+
+  return `${baseUrl}${cleanPath}`;
+};
+
 export default api;

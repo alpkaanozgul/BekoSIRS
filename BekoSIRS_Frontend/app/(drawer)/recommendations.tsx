@@ -12,7 +12,7 @@ import {
   Alert,
 } from 'react-native';
 import { FontAwesome } from '@expo/vector-icons';
-import { recommendationAPI, wishlistAPI, viewHistoryAPI } from '../../services/api';
+import { recommendationAPI, wishlistAPI, viewHistoryAPI, getImageUrl } from '../../services/api';
 import { useRouter } from 'expo-router';
 
 interface Recommendation {
@@ -125,7 +125,7 @@ const RecommendationsScreen = () => {
 
         <View style={styles.cardContent}>
           {product.image ? (
-            <Image source={{ uri: product.image }} style={styles.image} />
+            <Image source={{ uri: getImageUrl(product.image) || '' }} style={styles.image} />
           ) : (
             <View style={[styles.image, styles.imagePlaceholder]}>
               <FontAwesome name="image" size={40} color="#ccc" />

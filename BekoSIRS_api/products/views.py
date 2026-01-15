@@ -4,6 +4,8 @@ from rest_framework import viewsets, status, exceptions
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import action, api_view, permission_classes
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.filters import SearchFilter, OrderingFilter
 from django.contrib.auth.models import Group
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from rest_framework_simplejwt.views import TokenObtainPairView
@@ -99,19 +101,36 @@ class ProductViewSet(viewsets.ModelViewSet):
             return [AllowAny()]
         return [IsAuthenticated()]
 
+    filter_backends = [SearchFilter, OrderingFilter]
+    search_fields = ['name', 'brand', 'description', 'category__name', 'model_code']
+    ordering_fields = ['price', 'stock', 'created_at']
+    ordering = ['id']  # Default ordering
+
     def get_queryset(self):
-        user = self.request.user
-
-        # Anonim kullanıcılar için (giriş yapmamış)
-        if not user.is_authenticated:
-            return Product.objects.all().select_related("category")
-
-        # Admin ve Satıcılar her şeyi görür
-        if user.role in ["admin", "seller"]:
-            return Product.objects.all().select_related("category")
-
-        # Müşteri de tüm ürünleri görebilir
-        return Product.objects.all().select_related("category")
+        """
+        Override get_queryset to implement manual search filtering.
+        This is needed because SearchFilter wasn't working via filter_backends.
+        """
+        queryset = Product.objects.all().select_related("category")
+        
+        # Manual search implementation
+        search_query = self.request.query_params.get('search', None)
+        if search_query:
+            from django.db.models import Q
+            queryset = queryset.filter(
+                Q(name__icontains=search_query) |
+                Q(brand__icontains=search_query) |
+                Q(description__icontains=search_query) |
+                Q(category__name__icontains=search_query) |
+                Q(model_code__icontains=search_query)
+            )
+        
+        # Category filter
+        category = self.request.query_params.get('category', None)
+        if category:
+            queryset = queryset.filter(category_id=category)
+        
+        return queryset
 
     @action(
         detail=False,

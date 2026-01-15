@@ -93,7 +93,7 @@ class HybridRecommender:
         from .models import Product  # Import here to avoid circular imports
         
         products = Product.objects.all().values(
-            'id', 'name', 'description', 'brand', 'category__name'
+            'id', 'name', 'description', 'brand', 'category__name', 'price'
         )
         self.products_df = pd.DataFrame(list(products))
         
@@ -188,27 +188,52 @@ class HybridRecommender:
             return []
 
         # 1. Content-Based Scores
-        content_results = self._recommend_content_based(user, limit=None, ignore_cache=ignore_cache) # Get all scores
+        content_results = self._recommend_content_based(user, limit=None, ignore_cache=ignore_cache) 
         
         # 2. Collaborative Scores
         collab_results = self._recommend_collaborative(user)
         
         # 3. Hybrid Merge (Weighted)
-        # Weights: 70% Content (Safe), 30% Collab (Discovery)
         final_scores = {}
-        
+        reasons = {}
+
         # Normalize and merge Content scores
         max_content = max(content_results.values()) if content_results else 1.0
         for pid, score in content_results.items():
             final_scores[pid] = (score / max_content) * 0.7
+            if score > 0:
+                reasons[pid] = "İlgi alanlarınıza göre"
             
         # Normalize and merge Collab scores
         max_collab = max(collab_results.values()) if collab_results else 1.0
         for pid, score in collab_results.items():
-            final_scores[pid] = final_scores.get(pid, 0) + (score / max_collab) * 0.3
-            
+            normalized = (score / max_collab) * 0.3
+            if pid in final_scores:
+                final_scores[pid] += normalized
+                # If collab score is high, it might override the reason
+                if normalized > final_scores[pid] * 0.4:
+                    reasons[pid] = "Benzer kullanıcılar tercih etti"
+            else:
+                final_scores[pid] = normalized
+                reasons[pid] = "Benzer kullanıcılar tercih etti"
+
+        # 4. Search History Boost
+        search_boosts = self._get_search_boosts(user)
+        for pid, boost in search_boosts.items():
+            final_scores[pid] = final_scores.get(pid, 0) + boost
+            reasons[pid] = "Aramalarınıza göre"
+
+        # 5. Price Sensitivity Boost
+        price_boosts = self._get_price_sensitivity_boosts(user)
+        for pid, boost in price_boosts.items():
+            if pid in final_scores:
+                final_scores[pid] += boost
+                # Only change reason if this wasn't a search result
+                if reasons.get(pid) != "Aramalarınıza göre" and boost > 0.1:
+                    reasons[pid] = "Fiyat tercihlerinize uygun"
+
         # Sort and Format
-        return self._format_final_results(final_scores, top_n, exclude_ids)
+        return self._format_final_results(final_scores, reasons, top_n, exclude_ids)
 
     def _recommend_content_based(self, user, limit=None, ignore_cache=False):
         """Return raw dictionary {product_id: score}."""
@@ -261,7 +286,7 @@ class HybridRecommender:
             
         return scores
 
-    def _format_final_results(self, scores_dict, top_n, exclude_ids=None):
+    def _format_final_results(self, scores_dict, reasons_dict, top_n, exclude_ids=None):
         from .models import Product
         
         # Exclude IDs
@@ -277,10 +302,87 @@ class HybridRecommender:
         for pid, score in sorted_items:
             try:
                 obj = Product.objects.get(id=pid)
-                results.append({'product': obj, 'score': score})
+                results.append({
+                    'product': obj, 
+                    'product_id': pid,
+                    'score': score,
+                    'reason': reasons_dict.get(pid, 'Sizin için seçildi')
+                })
             except Product.DoesNotExist:
                 continue
         return results
+
+    def _get_search_boosts(self, user):
+        """Boost products based on search history text matching."""
+        from .models import SearchHistory
+        
+        boosts = {}
+        if self.products_df is None or self.products_df.empty:
+            return boosts
+            
+        recent_searches = SearchHistory.objects.filter(customer=user).order_by('-created_at')[:5]
+        if not recent_searches:
+            return boosts
+            
+        # Compile search terms
+        search_terms = [s.query.lower() for s in recent_searches]
+        
+        # Simple text matching (could be improved with TF-IDF again but this is faster)
+        # Note: products_df already has 'content' column from _train_content_model
+        if 'content' not in self.products_df.columns:
+             self.products_df['content'] = (
+                self.products_df['name'] + " " + 
+                self.products_df['description'].fillna('') + " " + 
+                self.products_df['brand'].fillna('') + " " + 
+                self.products_df['category__name'].fillna('')
+            ).str.lower()
+            
+        for index, row in self.products_df.iterrows():
+            pid = row['id']
+            content = str(row['content']).lower()
+            
+            score = 0
+            for term in search_terms:
+                if term in content:
+                    score += 2.0  # Significant boost for search match
+            
+            if score > 0:
+                boosts[pid] = score
+                
+        return boosts
+
+    def _get_price_sensitivity_boosts(self, user):
+        """Boost products that match the user's usual price range."""
+        from .models import ProductOwnership, ViewHistory
+        
+        boosts = {}
+        prices = []
+        
+        # Collect prices from purchases and views
+        owned = ProductOwnership.objects.filter(customer=user).values_list('product__price', flat=True)
+        viewed = ViewHistory.objects.filter(customer=user).values_list('product__price', flat=True)[:10]
+        
+        prices.extend([float(p) for p in owned if p])
+        prices.extend([float(p) for p in viewed if p])
+        
+        if not prices:
+            return boosts
+            
+        avg_price = sum(prices) / len(prices)
+        price_range_min = avg_price * 0.7
+        price_range_max = avg_price * 1.3
+        
+        # We need product prices. Products_df might not have it loaded by default logic.
+        if 'price' in self.products_df.columns:
+             for index, row in self.products_df.iterrows():
+                try:
+                    p_price = float(row['price']) if row['price'] else 0
+                    if price_range_min <= p_price <= price_range_max:
+                        boosts[row['id']] = 0.5 # Moderate boost
+                except:
+                    pass
+                    
+        return boosts
 
     def _get_user_interactions_dict(self, user, ignore_cache=False):
         """Gather raw interest scores for a single user with caching."""

@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, Image, StyleSheet, TouchableOpacity } from 'react-native';
+import { getImageUrl } from '../services/api';
 
 interface Product {
   id: number;
@@ -48,8 +49,8 @@ const MyProductCard: React.FC<MyProductCardProps> = ({ product, onPress }) => {
   };
 
   return (
-    <TouchableOpacity 
-      style={styles.card} 
+    <TouchableOpacity
+      style={styles.card}
       activeOpacity={0.7}
       onPress={onPress}
     >
@@ -57,7 +58,7 @@ const MyProductCard: React.FC<MyProductCardProps> = ({ product, onPress }) => {
       <View style={styles.imageContainer}>
         {product.image ? (
           <Image
-            source={{ uri: `http://192.168.1.6:8000${product.image}` }}
+            source={{ uri: getImageUrl(product.image) || '' }}
             style={styles.productImage}
             resizeMode="cover"
           />
@@ -66,7 +67,7 @@ const MyProductCard: React.FC<MyProductCardProps> = ({ product, onPress }) => {
             <Text style={styles.placeholderText}>📦</Text>
           </View>
         )}
-        
+
         {/* Status Badge */}
         <View
           style={[
