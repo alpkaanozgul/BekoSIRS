@@ -35,12 +35,12 @@ Beko ürünleri için akıllı envanter yönetimi, ürün önerileri ve servis t
 
 ### 💻 Web Panel (React + TypeScript)
 - 👥 Kullanıcı yönetimi ve rol ataması
-- 📦 Ürün ve kategori yönetimi
-- ⭐ Ürün değerlendirme onayları
-- 🔧 Servis talepleri takibi
+- 📦 **Kategori Yönetimi:** Tablo görünümü ile hızlı düzenleme
+- ⭐ **Değerlendirme Yönetimi:** Liste görünümü ve detay paneli ile hızlı onay/red
+- 🔧 **Servis Talepleri:** Sekmeli yapı (Aktif/Geçmiş) ve gelişmiş filtreleme
 - 🚚 Teslimat yönetimi ve rota optimizasyonu
 - 📢 Toplu bildirim gönderimi
-- 📊 Dashboard ve istatistikler
+- 📊 Dashboard ve profesyonel istatistik grafikleri
 
 ### 🖥️ Backend API (Django REST Framework)
 - 🔑 JWT Authentication + Token Refresh
