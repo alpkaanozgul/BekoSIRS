@@ -49,3 +49,7 @@ screenshots/
 
 # Claude
 .claude/
+
+# Backup files
+*.bak
+*.backup
