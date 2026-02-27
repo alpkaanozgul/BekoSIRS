@@ -40,7 +40,7 @@ jobs:
           DEBUG: 'True'
           ALLOWED_HOSTS: 'localhost,127.0.0.1'
         run: |
-          python manage.py test products --verbosity=2
+          pytest --no-header -v --override-ini="addopts=" -p no:cacheprovider
 
   # ─────────────────────────────────────────
   # Web Panel (React + TypeScript)
