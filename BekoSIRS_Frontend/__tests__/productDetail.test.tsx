@@ -3,7 +3,7 @@ import { render, fireEvent, waitFor } from '@testing-library/react-native';
 import { Alert, ActivityIndicator } from 'react-native';
 import ProductDetailScreen from '../app/product/[id]';
 import api from '../services/api';
-const { wishlistAPI, reviewAPI, productOwnershipAPI, viewHistoryAPI } = api as any;
+import { wishlistAPI, reviewAPI, productOwnershipAPI, viewHistoryAPI } from '../services/api';
 
 jest.mock('expo-router', () => ({
     useLocalSearchParams: () => ({ id: '1' }),
@@ -14,27 +14,30 @@ jest.mock('expo-router', () => ({
 }));
 
 // Mock the APIs
-jest.mock('../services/api', () => ({
-    __esModule: true,
-    default: {
-        get: jest.fn(),
-    },
-    wishlistAPI: {
-        checkItem: jest.fn(),
-        addItem: jest.fn(),
-        removeItem: jest.fn(),
-    },
-    reviewAPI: {
-        getProductReviews: jest.fn(),
-        addReview: jest.fn(),
-    },
-    productOwnershipAPI: {
-        getMyOwnerships: jest.fn(),
-    },
-    viewHistoryAPI: {
-        recordView: jest.fn(),
-    },
-}));
+jest.mock('../services/api', () => {
+    return {
+        __esModule: true,
+        default: {
+            get: jest.fn(),
+            post: jest.fn(),
+        },
+        wishlistAPI: {
+            checkItem: jest.fn(),
+            addItem: jest.fn(),
+            removeItem: jest.fn(),
+        },
+        reviewAPI: {
+            getProductReviews: jest.fn(),
+            addReview: jest.fn(),
+        },
+        productOwnershipAPI: {
+            getMyOwnerships: jest.fn(),
+        },
+        viewHistoryAPI: {
+            recordView: jest.fn(),
+        },
+    };
+});
 
 jest.mock('@expo/vector-icons', () => ({
     FontAwesome: 'FontAwesome',
