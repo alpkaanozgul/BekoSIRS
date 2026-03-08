@@ -8,7 +8,7 @@ import React from 'react';
 import { render, fireEvent, waitFor } from '@testing-library/react-native';
 import { Alert } from 'react-native';
 import RegisterScreen from '../app/register';
-import api from '../services';
+import api from '../services/api';
 
 jest.mock('expo-router', () => ({
     router: {
@@ -17,7 +17,7 @@ jest.mock('expo-router', () => ({
     },
 }));
 
-jest.mock('../services', () => ({
+jest.mock('../services/api', () => ({
     post: jest.fn(),
 }));
 
