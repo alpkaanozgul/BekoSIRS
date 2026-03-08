@@ -1,3 +1,9 @@
+/**
+ * @file register.test.tsx
+ * @description Kayıt Ol ekranı için birim testleri.
+ * Form alanlarının doğru render edilmesi, zorunlu alan kontrolü
+ * ve başarılı kayıt işleminin API üzerinden doğru çalışmasını doğrular.
+ */
 import React from 'react';
 import { render, fireEvent, waitFor } from '@testing-library/react-native';
 import { Alert } from 'react-native';
