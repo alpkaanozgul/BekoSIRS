@@ -1,8 +1,14 @@
+/**
+ * @file forgot-password.test.tsx
+ * @description Şifremi Unuttum ekranı için birim testleri.
+ * E-posta girişi, geçersiz format kontrolü ve API üzerinden
+ * şifre sıfırlama isteğinin doğru çalışmasını doğrular.
+ */
 import React from 'react';
 import { render, fireEvent, waitFor } from '@testing-library/react-native';
 import { Alert } from 'react-native';
 import ForgotPasswordScreen from '../app/forgot-password';
-import api from '../services/api';
+import api from '../services';
 
 // Mock Router
 jest.mock('expo-router', () => ({
@@ -12,7 +18,7 @@ jest.mock('expo-router', () => ({
 }));
 
 // Mock API
-jest.mock('../services/api', () => ({
+jest.mock('../services', () => ({
     post: jest.fn(),
 }));
 
@@ -83,3 +89,4 @@ describe('ForgotPasswordScreen UI Tests', () => {
         });
     });
 });
+

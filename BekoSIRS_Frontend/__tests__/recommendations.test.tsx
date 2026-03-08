@@ -1,7 +1,13 @@
+/**
+ * @file recommendations.test.tsx
+ * @description Yapay Zeka Önerileri ekranı için birim testleri.
+ * Görüntüleme geçmişine dayalı önerilerin listelenmesi, istek listesine
+ * ekleme ve ürün detay sayfasına yönlendirme işlemlerini doğrular.
+ */
 import React from 'react';
 import { render, fireEvent, waitFor } from '@testing-library/react-native';
 import RecommendationsScreen from '../app/(drawer)/recommendations';
-import { recommendationAPI, wishlistAPI } from '../services/api';
+import { recommendationAPI, wishlistAPI } from '../services';
 import { Alert } from 'react-native';
 
 const mockPush = jest.fn();
@@ -13,7 +19,7 @@ jest.mock('expo-router', () => ({
 }));
 
 // Mock the API
-jest.mock('../services/api', () => ({
+jest.mock('../services', () => ({
     recommendationAPI: {
         getRecommendations: jest.fn(),
     },
@@ -148,3 +154,4 @@ describe('RecommendationsScreen Tests', () => {
         });
     });
 });
+

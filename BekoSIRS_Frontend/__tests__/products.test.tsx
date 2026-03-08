@@ -1,11 +1,17 @@
+/**
+ * @file products.test.tsx
+ * @description Ürün Kataloğu ekranı için birim testleri.
+ * API'den ürün listesi çekme, arama kutusuyla filtreleme,
+ * sonuç bulunamadı durumu ve API hata yönetimini doğrular.
+ */
 import React from 'react';
 import { render, fireEvent, waitFor } from '@testing-library/react-native';
 import { Alert } from 'react-native';
 import ProductsScreen from '../app/products';
-import api from '../services/api';
+import api from '../services';
 
 // Mock API
-jest.mock('../services/api', () => ({
+jest.mock('../services', () => ({
     get: jest.fn(),
 }));
 
@@ -105,3 +111,4 @@ describe('ProductsScreen UI and Logic Tests', () => {
         });
     });
 });
+

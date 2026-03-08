@@ -1,7 +1,13 @@
+/**
+ * @file settings.test.tsx
+ * @description Ayarlar ekranı için birim testleri.
+ * Face ID / biyometrik giriş, şifre değiştirme, e-posta güncelleme
+ * ve çıkış yapma işlemlerinin doğru çalışmasını doğrular.
+ */
 import React from 'react';
 import { render, fireEvent, waitFor } from '@testing-library/react-native';
 import SettingsScreen from '../app/(drawer)/settings';
-import api from '../services/api';
+import api from '../services';
 import { Alert } from 'react-native';
 import { useBiometric } from '../hooks/useBiometric';
 
@@ -13,7 +19,7 @@ jest.mock('expo-router', () => ({
 }));
 
 // Mock API
-jest.mock('../services/api', () => ({
+jest.mock('../services', () => ({
     get: jest.fn(),
     post: jest.fn(),
 }));
@@ -28,6 +34,8 @@ jest.mock('../storage/storage.native', () => ({
     getToken: jest.fn(),
     getRefreshToken: jest.fn(),
     clearTokens: jest.fn(),
+    clearAllTokens: jest.fn().mockResolvedValue(undefined),
+    deleteToken: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('@react-native-async-storage/async-storage', () => ({
@@ -154,3 +162,4 @@ describe('SettingsScreen Tests', () => {
         // A thorough setup would test if replace was called with '/login'
     });
 });
+

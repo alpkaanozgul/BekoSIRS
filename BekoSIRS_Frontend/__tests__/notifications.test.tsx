@@ -1,11 +1,17 @@
+/**
+ * @file notifications.test.tsx
+ * @description Bildirimler ekranı için birim testleri.
+ * Bildirimlerin listelenmesi, okunmamış sayacı, bildirim okundu
+ * işaretleme ve boş durum görünümünü doğrular.
+ */
 import React from 'react';
 import { render, fireEvent, waitFor } from '@testing-library/react-native';
 import NotificationsScreen from '../app/(drawer)/notifications';
-import { notificationAPI } from '../services/api';
+import { notificationAPI } from '../services';
 import { Alert } from 'react-native';
 
 // Mock the API
-jest.mock('../services/api', () => ({
+jest.mock('../services', () => ({
     notificationAPI: {
         getNotifications: jest.fn(),
         getUnreadCount: jest.fn(),
@@ -124,3 +130,4 @@ describe('NotificationsScreen Tests', () => {
         });
     });
 });
+

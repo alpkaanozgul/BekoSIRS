@@ -1,8 +1,15 @@
+/**
+ * @file my-products.test.tsx
+ * @description Cihazlarım ekranı için birim testleri.
+ * Kullanıcıya ait ürün sahiplikleri ve bekleyen siparişlerin
+ * listelenmesi, detay sayfasına ve servis talebine yönlendirme
+ * ile boş durum görünümlerini doğrular.
+ */
 import React from 'react';
 import { render, fireEvent, waitFor } from '@testing-library/react-native';
 import MyProductsScreen from '../app/(drawer)/(tabs)/my-products';
 // @ts-ignore
-import api, { assignmentAPI } from '../services/api';
+import api, { assignmentAPI } from '../services';
 
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
@@ -12,7 +19,7 @@ jest.mock('expo-router', () => ({
 }));
 
 // Mock the APIs
-jest.mock('../services/api', () => ({
+jest.mock('../services', () => ({
     __esModule: true,
     default: {
         get: jest.fn(),
@@ -171,3 +178,4 @@ describe('MyProductsScreen Tests', () => {
         });
     });
 });
+

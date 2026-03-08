@@ -18,6 +18,13 @@ class UserManagementViewSet(viewsets.ModelViewSet):
     """User CRUD with role management."""
     queryset = CustomUser.objects.all()
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        role = self.request.query_params.get('role')
+        if role:
+            qs = qs.filter(role=role)
+        return qs
+
     def get_serializer_class(self):
         if self.action == "create":
             return RegisterSerializer
@@ -26,7 +33,8 @@ class UserManagementViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action == "create":
             return [AllowAny()]
-        return [IsAdminUser()]
+        from products.permissions import IsAdmin
+        return [IsAdmin()]
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
