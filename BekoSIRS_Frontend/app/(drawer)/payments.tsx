@@ -249,7 +249,7 @@ const PaymentsScreen = () => {
                 data={plans}
                 renderItem={renderPlan}
                 keyExtractor={(item) => item.id.toString()}
-                contentContainerStyle={styles.list}
+                contentContainerStyle={[styles.list, { flexGrow: 1 }]}
                 refreshControl={
                     <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
                 }
@@ -469,7 +469,6 @@ const styles = StyleSheet.create({
         flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: 80,
     },
     emptyTitle: {
         fontSize: 18,
