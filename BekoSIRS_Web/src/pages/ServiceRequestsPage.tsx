@@ -578,16 +578,9 @@ export default function ServiceRequestsPage() {
                       disabled={actionLoading || selectedRequest.status === "cancelled" || selectedRequest.status === "completed"}
                       className="w-full px-4 py-3 border border-gray-300 rounded-xl appearance-none focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white font-medium disabled:opacity-50"
                     >
-                      <option value="1">1 - En Acil (VIP)</option>
-                      <option value="2">2 - Çok Acil</option>
-                      <option value="3">3 - Acil</option>
-                      <option value="4">4 - Yüksek Öncelik</option>
-                      <option value="5">5 - Normal Öncelik</option>
-                      <option value="6">6 - Düşük Öncelik</option>
-                      <option value="7">7 - Çok Düşük Öncelik</option>
-                      <option value="8">8 - Bekleyebilir</option>
-                      <option value="9">9 - Arka Plan</option>
-                      <option value="10">10 - Son Sıra</option>
+                      <option value="1">1 - Yüksek Öncelik</option>
+                      <option value="2">2 - Normal Öncelik</option>
+                      <option value="3">3 - Düşük Öncelik</option>
                     </select>
                     <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={18} />
                   </div>

@@ -102,7 +102,18 @@ _db_user = os.getenv('DB_USER')
 _db_password = os.getenv('DB_PASSWORD')
 _db_host = os.getenv('DB_HOST')
 
-if all([_db_name, _db_user, _db_password, _db_host]):
+if os.getenv('DB_ENGINE') == 'postgresql':
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': _db_name,
+            'USER': _db_user,
+            'PASSWORD': _db_password,
+            'HOST': _db_host,
+            'PORT': os.getenv('DB_PORT', '5432'),
+        }
+    }
+elif all([_db_name, _db_user, _db_password, _db_host]):
     DATABASES = {
         'default': {
             'ENGINE': 'mssql',
