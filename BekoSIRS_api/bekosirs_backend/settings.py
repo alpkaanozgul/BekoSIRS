@@ -110,7 +110,7 @@ if os.getenv('DB_ENGINE') == 'postgresql':
             'USER': _db_user,
             'PASSWORD': _db_password,
             'HOST': _db_host,
-            'PORT': os.getenv('DB_PORT', '5432'),
+            'PORT': os.getenv('DB_PORT', '6543'),  # Default to Pooler port for Supabase
         }
     }
 elif all([_db_name, _db_user, _db_password, _db_host]):
@@ -129,7 +129,7 @@ elif all([_db_name, _db_user, _db_password, _db_host]):
         }
     }
 else:
-    # SQLite fallback for local development/testing
+    # SQLite fallback for local development/testing or CI
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
