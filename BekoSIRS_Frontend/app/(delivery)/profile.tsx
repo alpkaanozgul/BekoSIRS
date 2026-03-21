@@ -28,6 +28,7 @@ interface UserProfile {
 }
 
 export default function DeliveryProfileScreen() {
+    const { logout } = useAuth();
     const [profile, setProfile] = useState<UserProfile | null>(null);
     const [loading, setLoading] = useState(true);
 
@@ -55,9 +56,7 @@ export default function DeliveryProfileScreen() {
                     text: 'Çıkış Yap',
                     style: 'destructive',
                     onPress: async () => {
-                        await deleteToken();
-                        await AsyncStorage.removeItem('userRole');
-                        router.replace('/login');
+                        await logout();
                     },
                 },
             ]
