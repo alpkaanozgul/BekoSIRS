@@ -194,8 +194,9 @@ export default function DeliveryMap() {
                     })
                 )}
 
-                <View style={{ height: 32 }} />
+                <View style={{ height: 100 }} />
             </ScrollView>
+
         </View>
     );
 }

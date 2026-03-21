@@ -28,6 +28,7 @@ interface UserProfile {
 }
 
 export default function DeliveryProfileScreen() {
+    const { logout } = useAuth();
     const [profile, setProfile] = useState<UserProfile | null>(null);
     const [loading, setLoading] = useState(true);
 
@@ -55,9 +56,7 @@ export default function DeliveryProfileScreen() {
                     text: 'Çıkış Yap',
                     style: 'destructive',
                     onPress: async () => {
-                        await deleteToken();
-                        await AsyncStorage.removeItem('userRole');
-                        router.replace('/login');
+                        await logout();
                     },
                 },
             ]
@@ -144,25 +143,6 @@ export default function DeliveryProfileScreen() {
                 <View style={{ height: 100 }} />
             </ScrollView>
 
-            {/* Bottom Navigation */}
-            <View style={styles.bottomNav}>
-                <TouchableOpacity style={styles.navItem} onPress={() => router.push('/(delivery)' as any)}>
-                    <Ionicons name="home-outline" size={24} color="#9ca3af" />
-                    <Text style={styles.navLabel}>Ana Sayfa</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.navItem} onPress={() => router.push('/(delivery)' as any)}>
-                    <Ionicons name="list-outline" size={24} color="#9ca3af" />
-                    <Text style={styles.navLabel}>Görevler</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.navItem} onPress={() => router.push('/(delivery)/map' as any)}>
-                    <Ionicons name="map-outline" size={24} color="#9ca3af" />
-                    <Text style={styles.navLabel}>Rota</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.navItem}>
-                    <Ionicons name="person" size={24} color="#137fec" />
-                    <Text style={[styles.navLabel, styles.navLabelActive]}>Profil</Text>
-                </TouchableOpacity>
-            </View>
         </View>
     );
 }
@@ -301,31 +281,5 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontWeight: '700',
         color: '#dc2626',
-    },
-    bottomNav: {
-        position: 'absolute',
-        bottom: 0,
-        left: 0,
-        right: 0,
-        backgroundColor: '#fff',
-        flexDirection: 'row',
-        justifyContent: 'space-around',
-        paddingVertical: 12,
-        paddingBottom: 28,
-        borderTopWidth: 1,
-        borderTopColor: '#f1f5f9',
-    },
-    navItem: {
-        alignItems: 'center',
-        gap: 4,
-    },
-    navLabel: {
-        fontSize: 10,
-        fontWeight: '500',
-        color: '#9ca3af',
-    },
-    navLabelActive: {
-        color: '#137fec',
-        fontWeight: '700',
     },
 });
