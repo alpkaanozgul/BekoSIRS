@@ -16,6 +16,22 @@ jobs:
       run:
         working-directory: ./BekoSIRS_api
 
+    # Ephemeral PostgreSQL — her CI run'ında sıfırdan başlar, production'a dokunmaz
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: bekosirs_test
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -39,15 +55,15 @@ jobs:
           SECRET_KEY: 'test-secret-key-for-ci-only'
           DEBUG: 'True'
           ALLOWED_HOSTS: 'localhost,127.0.0.1'
+          # CI: lokal PostgreSQL container (production'da Supabase kullanılır)
           DB_ENGINE: 'postgresql'
-          DB_NAME: 'postgres'
-          DB_USER: 'postgres.lvgruacuivsrkwnhkoet'
-          DB_PASSWORD: 'fUovx0Y9IY3E2q9u'
-          DB_HOST: 'aws-1-eu-west-1.pooler.supabase.com'
+          DB_NAME: 'bekosirs_test'
+          DB_USER: 'testuser'
+          DB_PASSWORD: 'testpassword'
+          DB_HOST: 'localhost'
           DB_PORT: '5432'
         run: |
           pytest --no-header -v --override-ini="addopts=--nomigrations" -p no:cacheprovider \
-            --reuse-db \
             --cov=products --cov=bekosirs_backend \
             --cov-report=term-missing \
             --cov-fail-under=25 \

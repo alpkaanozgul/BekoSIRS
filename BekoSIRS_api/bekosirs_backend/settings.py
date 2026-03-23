@@ -114,9 +114,6 @@ if all([_db_name, _db_user, _db_password, _db_host]):
                 'PASSWORD': _db_password,
                 'HOST': _db_host,
                 'PORT': _db_port or '5432',
-                'TEST': {
-                    'NAME': 'postgres',
-                },
             }
         }
     else:
