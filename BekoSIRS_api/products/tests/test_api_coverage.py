@@ -80,8 +80,8 @@ class TestProductAPI:
         r = api_client.get('/api/v1/products/')
         assert r.status_code == status.HTTP_200_OK
 
-    def test_list_products_unauthenticated(self, api_client):
-        r = api_client.get('/api/v1/products/')
+    def test_create_product_unauthenticated_blocked(self, api_client, category):
+        r = api_client.post('/api/v1/products/', {'name': 'Hack', 'price': 1, 'stock': 1, 'category': category.id})
         assert r.status_code == status.HTTP_401_UNAUTHORIZED
 
     def test_product_detail(self, api_client, customer_user, product):
@@ -102,19 +102,15 @@ class TestProductAPI:
 
 @pytest.mark.django_db
 class TestWishlistAPI:
-    def test_create_wishlist(self, api_client, customer_user):
-        api_client.force_authenticate(user=customer_user)
-        r = api_client.post('/api/v1/wishlist/', {'name': 'Favorilerim'})
-        assert r.status_code == status.HTTP_201_CREATED
-
     def test_list_wishlist(self, api_client, customer_user):
-        Wishlist.objects.create(customer=customer_user, name='Test Liste')
+        # Wishlist is OneToOne per customer — create directly
+        Wishlist.objects.create(customer=customer_user)
         api_client.force_authenticate(user=customer_user)
         r = api_client.get('/api/v1/wishlist/')
         assert r.status_code == status.HTTP_200_OK
 
     def test_add_item_to_wishlist(self, api_client, customer_user, product):
-        wishlist = Wishlist.objects.create(customer=customer_user, name='Liste')
+        wishlist = Wishlist.objects.create(customer=customer_user)
         api_client.force_authenticate(user=customer_user)
         r = api_client.post('/api/v1/wishlist-items/', {
             'wishlist': wishlist.id,
@@ -154,18 +150,16 @@ class TestServiceRequestAPI:
     def test_customer_create_service_request(self, api_client, customer_user, product, ownership):
         api_client.force_authenticate(user=customer_user)
         r = api_client.post('/api/v1/service-requests/', {
-            'product': product.id,
             'description': 'Kapı açılmıyor.',
-            'problem_type': 'malfunction',
+            'request_type': 'repair',
         })
         assert r.status_code == status.HTTP_201_CREATED
 
     def test_list_service_requests_admin(self, api_client, admin_user, customer_user, product, ownership):
         ServiceRequest.objects.create(
             customer=customer_user,
-            product=product,
             description='Test arıza',
-            problem_type='malfunction',
+            request_type='repair',
         )
         api_client.force_authenticate(user=admin_user)
         r = api_client.get('/api/v1/service-requests/')
@@ -174,9 +168,8 @@ class TestServiceRequestAPI:
     def test_customer_sees_own_requests_only(self, api_client, customer_user, admin_user, product, ownership):
         ServiceRequest.objects.create(
             customer=customer_user,
-            product=product,
             description='Kendi talebim',
-            problem_type='malfunction',
+            request_type='repair',
         )
         api_client.force_authenticate(user=customer_user)
         r = api_client.get('/api/v1/service-requests/')
