@@ -196,7 +196,7 @@ describe('PaymentsScreen Tests', () => {
         fireEvent.press(getByText('Buzdolabı'));
 
         await waitFor(() => {
-            expect(getByText('45 gün gecikmiş')).toBeTruthy();
+            expect(getByText('Ödemeniz 45 gün gecikti')).toBeTruthy();
         });
     });
 

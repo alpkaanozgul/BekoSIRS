@@ -121,7 +121,7 @@ const PaymentsScreen = () => {
 
     const getDaysLabel = (inst: Installment): string => {
         if (inst.status === 'paid' || inst.status === 'customer_confirmed') return '';
-        if (inst.is_overdue) return `${Math.abs(inst.days_until_due)} gün gecikmiş`;
+        if (inst.is_overdue || inst.days_until_due < 0) return `Ödemeniz ${Math.abs(inst.days_until_due)} gün gecikti`;
         if (inst.days_until_due === 0) return 'Bugün son gün';
         return `${inst.days_until_due} gün kaldı`;
     };
