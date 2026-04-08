@@ -27,10 +27,13 @@ Mimariyi, dosya yapısını ve kodlama kurallarını anladıktan sonra başla.
    ```
    Testler geçmeden bir sonraki göreve geçme.
 
-3. **Her görev için ayrı bir git branch aç:**
+3. **Tüm çalışmayı tek bir izole branch'te yap — main'e DOKUNMA:**
    ```bash
-   git checkout -b feat/ml-<görev-adı>
+   # Sadece bir kez, başta çalıştır:
+   git checkout -b feat/ml-recommendation-improvements
    ```
+   **YASAK: `git push origin main`, `git merge main`, `git checkout main`**
+   Tüm commit'ler yalnızca `feat/ml-recommendation-improvements` branch'ine gidecek.
 
 4. **Commit mesajları çok detaylı olacak:**
    ```
@@ -46,12 +49,18 @@ Mimariyi, dosya yapısını ve kodlama kurallarını anladıktan sonra başla.
    - Verified: hit_rate_at_10 improved from 0.62 to 0.67 on test data
    ```
 
-5. **Push et:**
+5. **Her görev bittikçe branch'e push et:**
    ```bash
-   git push origin feat/ml-<görev-adı>
+   git push origin feat/ml-recommendation-improvements
    ```
 
-6. **Pull Request aç** — başlık ve açıklama Türkçe olabilir, ne değiştirdiğini ve neden yaptığını açıkla.
+6. **Tüm görevler tamamlanınca PR aç, sonra DUR — merge etme:**
+   ```bash
+   gh pr create --base main --head feat/ml-recommendation-improvements \
+     --title "feat(ml): recommendation system improvements" \
+     --body "7 görevin özeti: temporal decay, adaptive weights, new product boost, click feedback, mobile UI, advanced metrics"
+   ```
+   PR açıldıktan sonra dur. Merge kararı insana ait.
 
 ---
 
@@ -521,21 +530,19 @@ Bu görevi diğer 6 görev tamamlandıktan sonra yap.
 
 ## Görev Sırası (Önerilen)
 
+**Tüm görevler aynı branch'te: `feat/ml-recommendation-improvements`**
+**main'e hiçbir şey pushlanmayacak.**
+
 ```
-Görev 1 (Temporal Decay)
-    → test et → push
-Görev 2 (Adaptive Weights)
-    → test et → push
-Görev 3 (New Product Boost)
-    → test et → push
-Görev 4 (Click Feedback)
-    → test et → push
-Görev 5 (Mobile UI) — Görev 4'ün dismiss endpoint'ine bağımlı
-    → test et → push
-Görev 6 (Metrics)
-    → test et → push
-Görev 7 (Entegrasyon)
-    → hepsini test et → final PR
+git checkout -b feat/ml-recommendation-improvements   ← SADECE BİR KEZ
+
+Görev 1 → test et → commit → push origin feat/ml-recommendation-improvements
+Görev 2 → test et → commit → push origin feat/ml-recommendation-improvements
+Görev 3 → test et → commit → push origin feat/ml-recommendation-improvements
+Görev 4 → test et → commit → push origin feat/ml-recommendation-improvements
+Görev 5 → test et → commit → push origin feat/ml-recommendation-improvements
+Görev 6 → test et → commit → push origin feat/ml-recommendation-improvements
+Görev 7 → hepsini test et → commit → push → PR aç → DUR (merge etme)
 ```
 
 ---
