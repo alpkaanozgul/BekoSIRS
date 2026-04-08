@@ -1379,6 +1379,112 @@ class HybridRecommender:
 
         return boosts
 
+    def _normalize_metric_input(self, recommendation):
+        """
+        Normalize recommendation payloads into metric-friendly primitives.
+
+        The recommendation screen can be fed either model instances or serialized
+        dictionaries, so we flatten both shapes into the same structure before
+        computing diversity and coverage numbers.
+        """
+        product_id = None
+        category_name = None
+        score_value = 0.0
+        price_value = None
+
+        if isinstance(recommendation, dict):
+            product_data = recommendation.get('product') or {}
+            category_data = product_data.get('category') or {}
+            product_id = recommendation.get('product_id') or product_data.get('id')
+            category_name = product_data.get('category_name') or category_data.get('name')
+            score_value = recommendation.get('score', 0.0) or 0.0
+            raw_price = product_data.get('price')
+        else:
+            product = getattr(recommendation, 'product', None)
+            category = getattr(product, 'category', None)
+            product_id = getattr(recommendation, 'product_id', None) or getattr(product, 'id', None)
+            category_name = getattr(category, 'name', None)
+            score_value = getattr(recommendation, 'score', 0.0) or 0.0
+            raw_price = getattr(product, 'price', None)
+
+        try:
+            score_value = float(score_value)
+        except (TypeError, ValueError):
+            score_value = 0.0
+
+        try:
+            price_value = float(raw_price) if raw_price not in (None, '') else None
+        except (TypeError, ValueError):
+            price_value = None
+
+        return {
+            'product_id': product_id,
+            'category_name': str(category_name).strip() if category_name else None,
+            'score': score_value,
+            'price': price_value,
+        }
+
+    def _compute_advanced_metrics(self, recommendations_list, all_products_count=None):
+        """
+        Compute list-level recommendation quality metrics for diagnostics.
+
+        These metrics intentionally evaluate the concrete list shown to the user
+        instead of only offline training data, because diversity and coverage
+        are properties of the final ranked slate.
+        """
+        normalized_items = [
+            self._normalize_metric_input(recommendation)
+            for recommendation in recommendations_list
+        ]
+
+        if all_products_count is None:
+            from .models import Product
+
+            # Coverage should reflect the live catalog the business currently
+            # offers, not only the last persisted model snapshot. We therefore
+            # use the database count first and fall back to the loaded model
+            # only if the runtime catalog is unexpectedly empty.
+            all_products_count = Product.objects.count()
+            if all_products_count == 0 and self.content.products_df is not None and not self.content.products_df.empty:
+                all_products_count = len(self.content.products_df)
+
+        categories = [
+            item['category_name']
+            for item in normalized_items
+            if item['category_name']
+        ]
+        unique_categories = len(set(categories))
+        diversity_score = unique_categories / max(len(normalized_items), 1)
+
+        unique_recommended = len({
+            item['product_id']
+            for item in normalized_items
+            if item['product_id'] is not None
+        })
+        catalog_coverage = unique_recommended / max(int(all_products_count or 0), 1)
+
+        scores = [item['score'] for item in normalized_items]
+        avg_recommendation_score = float(np.mean(scores)) if scores else 0.0
+
+        prices = [item['price'] for item in normalized_items if item['price'] is not None]
+        # Price variance is a lightweight proxy for intra-list diversity; a list
+        # spanning multiple price bands usually feels less repetitive to users.
+        price_variance_in_list = float(np.var(prices)) if prices else 0.0
+
+        return {
+            'diversity_score': round(diversity_score, 3),
+            'catalog_coverage': round(catalog_coverage, 3),
+            'avg_recommendation_score': round(avg_recommendation_score, 3),
+            'price_variance_in_list': round(price_variance_in_list, 3),
+        }
+
+    def get_advanced_metrics(self, recommendations_list, all_products_count=None):
+        """Public wrapper so views can attach runtime list metrics to ml_metrics."""
+        return self._compute_advanced_metrics(
+            recommendations_list,
+            all_products_count=all_products_count,
+        )
+
     def _format_results(self, scores, reasons, top_n, exclude_ids, user=None):
         """Sort and format final recommendation results with category diversity."""
         from .models import Product, ViewHistory, Review, ProductOwnership, WishlistItem
