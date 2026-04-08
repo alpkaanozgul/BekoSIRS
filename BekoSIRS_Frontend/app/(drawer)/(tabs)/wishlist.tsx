@@ -12,7 +12,7 @@ import {
   Image,
 } from 'react-native';
 import { FontAwesome } from '@expo/vector-icons';
-import { wishlistAPI, viewHistoryAPI } from '../../../services';
+import { wishlistAPI, viewHistoryAPI, getImageUrl } from '../../../services';
 import { useRouter } from 'expo-router';
 
 interface WishlistItem {
@@ -109,7 +109,7 @@ const WishlistScreen = () => {
           activeOpacity={0.7}
         >
           {product.image ? (
-            <Image source={{ uri: product.image }} style={styles.image} />
+            <Image source={{ uri: getImageUrl(product.image) || '' }} style={styles.image} />
           ) : (
             <View style={[styles.image, styles.imagePlaceholder]}>
               <FontAwesome name="image" size={40} color="#ccc" />
