@@ -1,5 +1,5 @@
 """
-Temporal decay tests for the hybrid recommender interaction pipeline.
+Hybrid recommender etkilesim hattindaki zamansal curume davranisini dogrulayan testler.
 """
 
 from datetime import date, datetime, timedelta, timezone
@@ -17,7 +17,7 @@ User = get_user_model()
 
 @pytest.fixture(autouse=True)
 def clear_ml_cache():
-    """Clear recommender cache so each test evaluates fresh interaction weights."""
+    """Her testin agirliklari cache etkisi olmadan sifirdan hesaplamasini saglar."""
     cache.clear()
     yield
     cache.clear()
@@ -25,19 +25,19 @@ def clear_ml_cache():
 
 @pytest.fixture
 def customer(db):
-    """Create a customer user for recommender interaction tests."""
+    """Zamansal curume senaryolarinin ortak musteri kullanicisini olusturur."""
     return User.objects.create_user(username='decay-user', password='Decay123!', role='customer')
 
 
 @pytest.fixture
 def category(db):
-    """Create a shared category so products are easy to compare in tests."""
+    """Ayni kategori altinda urun karsilastirmak kolay olsun diye ortak kategori kurar."""
     return Category.objects.create(name='Temporal Decay Category')
 
 
 @pytest.fixture
 def products(db, category):
-    """Create a pair of products used to compare old and recent interactions."""
+    """Eski ve yeni etkilesimi karsilastirmak icin iki urunluk test havuzu kurar."""
     recent_product = Product.objects.create(
         name='Yeni İlgi Ürünü',
         brand='Beko',
@@ -56,29 +56,31 @@ def products(db, category):
 
 
 def _build_recommender_for_unit_test():
-    """Create a lightweight recommender instance without triggering singleton side effects."""
+    """Singleton yan etkilerini tetiklemeden hafif bir recommender ornegi kurar."""
     return object.__new__(HybridRecommender)
 
 
 def test_temporal_weight_recent_interaction_higher():
-    """Güncel etkileşim eski etkileşimden daha yüksek ağırlık almalı."""
+    """Yeni etkilesim eski etkilesimden daha yuksek agirlik almali."""
     recent = temporal_weight(datetime.now(timezone.utc) - timedelta(days=5))
     old = temporal_weight(datetime.now(timezone.utc) - timedelta(days=60))
     assert recent > old
 
 
 def test_temporal_weight_half_life():
-    """30 günde ağırlık yarıya düşmeli (±%5 tolerans)."""
+    """Yari omur 30 gun ise agirlik yaklasik yariya dusmeli."""
     weight = temporal_weight(
         datetime.now(timezone.utc) - timedelta(days=30),
         half_life_days=30,
     )
+    # Formul geregi 30 gunluk kayit 0.5 agirlik alir; kucuk zaman kaymalarina
+    # karsi testi kirilgan yapmamak icin %5 tolerans kullaniyoruz.
     assert abs(weight - 0.5) < 0.05
 
 
 @pytest.mark.django_db
 def test_interactions_include_decay(customer, products):
-    """_get_user_interactions eski view kaydını yeni kayıttan daha düşük ağırlıkta toplamalı."""
+    """View kayitlari yaslandikca daha dusuk agirlikla toplanmali."""
     recent_product, old_product = products
     recommender = _build_recommender_for_unit_test()
 
@@ -93,8 +95,8 @@ def test_interactions_include_decay(customer, products):
         view_count=8,
     )
 
-    # Auto timestamp alanlarını tarihsel senaryolara çekiyoruz çünkü gerçek
-    # üretim verisinde kararlar bu alanların yaşına göre veriliyor.
+    # Zaman damgalarini geriye cekiyoruz cunku gercek karar mantigi kaydin
+    # yasina bakiyor; boylece ayni view_count icin sadece tarih farkini olcuyoruz.
     ViewHistory.objects.filter(pk=recent_view.pk).update(
         viewed_at=datetime.now(timezone.utc) - timedelta(days=2)
     )
@@ -104,6 +106,8 @@ def test_interactions_include_decay(customer, products):
 
     interactions = recommender._get_user_interactions(customer, ignore_cache=True)
 
+    # Beklenen skor = view_count * temporal_weight.
+    # Ornek: 8 view ve decay 0.5 ise beklenen katki 4.0 olur.
     expected_recent = 8 * temporal_weight(
         datetime.now(timezone.utc) - timedelta(days=2),
         half_life_days=HybridRecommender.DECAY_VIEW_DAYS,
@@ -120,7 +124,7 @@ def test_interactions_include_decay(customer, products):
 
 @pytest.mark.django_db
 def test_purchase_decay_uses_date_field(customer, category):
-    """DateField purchase_date kayıtları da decay formülüne göre ağırlıklandırılmalı."""
+    """DateField purchase_date alanlari da ayni decay formulune uymali."""
     owned_product = Product.objects.create(
         name='Satın Alınan Ürün',
         brand='Beko',
@@ -137,6 +141,7 @@ def test_purchase_decay_uses_date_field(customer, category):
     recommender = _build_recommender_for_unit_test()
     interactions = recommender._get_user_interactions(customer, ignore_cache=True)
 
+    # Satin alma taban puani 5.0'dur; decay ile carpilarak zamani eski kayitlar yumusatilir.
     expected_weight = 5.0 * temporal_weight(
         date.today() - timedelta(days=90),
         half_life_days=HybridRecommender.DECAY_PURCHASE_DAYS,
@@ -146,7 +151,7 @@ def test_purchase_decay_uses_date_field(customer, category):
 
 @pytest.mark.django_db
 def test_wishlist_and_review_decay_are_applied(customer, products):
-    """Wishlist ve review sinyalleri kendi half-life değerleriyle ölçeklenmeli."""
+    """Wishlist ve review sinyalleri kendi yari omur degerleriyle olceklenmeli."""
     wishlist_product, review_product = products
     wishlist = Wishlist.objects.create(customer=customer)
 
@@ -171,6 +176,8 @@ def test_wishlist_and_review_decay_are_applied(customer, products):
     recommender = _build_recommender_for_unit_test()
     interactions = recommender._get_user_interactions(customer, ignore_cache=True)
 
+    # Wishlist taban puani 3.0, review taban puani rating degeridir.
+    # Bu test her sinyalin kendi yari omur sabitini kullandigini kilitler.
     expected_wishlist = 3.0 * temporal_weight(
         datetime.now(timezone.utc) - timedelta(days=45),
         half_life_days=HybridRecommender.DECAY_WISHLIST_DAYS,

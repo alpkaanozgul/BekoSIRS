@@ -73,8 +73,8 @@ const RecommendationsScreen = () => {
     ? recommendations
     : recommendations.filter(item => getRecommendationCategory(item) === selectedCat);
 
-  // Derived kategori listesi ve agirliklar ekranin render akisini basit tutar;
-  // filtreleme ve skor kirilimini ek API cagrisi olmadan hesapliyoruz.
+  // Turetilmis kategori listesi ve agirliklar render akisinda hesaplanir;
+  // boylece filtreleme ve skor kirilimi icin ek API cagrisi gerekmez.
   const fetchWishlistIds = useCallback(async () => {
     try {
       const response = await wishlistAPI.getWishlist();
@@ -92,7 +92,7 @@ const RecommendationsScreen = () => {
       const response = await recommendationAPI.getRecommendations(forceRefresh);
       const data = response.data;
       
-      // Handle new response format with ml_metrics
+      // Yeni response biciminde oneriler ve ml_metrics ayni payload'da gelebilir.
       if (data.recommendations) {
         setRecommendations(Array.isArray(data.recommendations) ? data.recommendations : []);
       } else {
@@ -112,7 +112,7 @@ const RecommendationsScreen = () => {
   }, []);
 
   useEffect(() => {
-    fetchRecommendations(false); // Load cached recs (instant)
+    fetchRecommendations(false); // Ilk yuklemede cache'teki oneri listesini hizli goster.
     fetchWishlistIds();
   }, [fetchRecommendations, fetchWishlistIds]);
 
@@ -127,7 +127,7 @@ const RecommendationsScreen = () => {
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    fetchRecommendations(true); // Trigger ML re-scoring on backend
+    fetchRecommendations(true); // Asagi cekmede backend'i yeniden skor hesaplamaya zorla.
     fetchWishlistIds();
   }, [fetchRecommendations, fetchWishlistIds]);
 
@@ -149,13 +149,15 @@ const RecommendationsScreen = () => {
     router.push(`/product/${item.product.id}`);
   };
 
+  // Tek geri bildirim akisi kullanildi; boylece begen ve dismiss aksiyonlari
+  // ayni hata yonetimi ve anlik UI guncellemesiyle tutarli davranir.
   const handleFeedback = async (item: Recommendation, feedbackType: 'like' | 'dismiss') => {
     if (!item.id) return;
     try {
       if (feedbackType === 'like') {
         await recommendationAPI.recordClick(item.id);
-        // We update local state immediately so the UI reflects the user's
-        // feedback without waiting for a full recommendation refresh cycle.
+        // Tiklama olumlu sinyaldir; local state'i hemen guncelleyerek tam liste
+        // yenilemesini beklemeden kartin geri bildirime tepki vermesini sagliyoruz.
         setRecommendations(prev => prev.map(rec => (
           rec.id === item.id ? { ...rec, clicked: true } : rec
         )));
@@ -174,7 +176,7 @@ const RecommendationsScreen = () => {
     }
   };
 
-  // Score color with gradient feel
+  // Skor rengi, kullanicinin oneri gucunu hizli okumasini kolaylastirir.
   const getScoreColor = (score: number) => {
     if (score >= 1.0) return '#2E7D32';
     if (score >= 0.7) return '#4CAF50';
@@ -191,7 +193,7 @@ const RecommendationsScreen = () => {
     return 'Temel';
   };
 
-  // Rank badge (1st, 2nd, 3rd...)
+  // Sira rozeti, ilk uc adayi tek bakista ayirt etmeyi saglar.
   const getRankEmoji = (index: number) => {
     if (index === 0) return '🥇';
     if (index === 1) return '🥈';
@@ -208,7 +210,7 @@ const RecommendationsScreen = () => {
     
     return (
       <View style={styles.metricsCard}>
-        {/* Testing notice banner */}
+        {/* Test bildirimi sadece bu kartin gelistirme amacli oldugunu hatirlatir. */}
         <View style={styles.testingBanner}>
           <FontAwesome name="flask" size={14} color="#fff" />
           <Text style={styles.testingBannerText}>
@@ -221,7 +223,7 @@ const RecommendationsScreen = () => {
           <Text style={styles.metricsSubtitle}>Neural Collaborative Filtering (NCF)</Text>
           
           <View style={styles.metricsGrid}>
-            {/* R² Score */}
+            {/* R2 kutusu modelin test basarisini ozetler. */}
             <View style={styles.metricBox}>
               <Text style={styles.metricLabel}>R² Score (Test)</Text>
               <Text style={[
@@ -235,7 +237,7 @@ const RecommendationsScreen = () => {
               </Text>
             </View>
 
-            {/* Hit Rate */}
+            {/* Hit rate kutusu ilk 10 tahminde isabet oranini gosterir. */}
             <View style={styles.metricBox}>
               <Text style={styles.metricLabel}>Hit Rate @10</Text>
               <Text style={[
@@ -249,7 +251,7 @@ const RecommendationsScreen = () => {
               </Text>
             </View>
 
-            {/* Training Info */}
+            {/* Egitim verisi kutusu modelin beslendigi sinyal miktarini gosterir. */}
             <View style={styles.metricBox}>
               <Text style={styles.metricLabel}>Eğitim Verisi</Text>
               <Text style={styles.metricValue}>
@@ -258,7 +260,7 @@ const RecommendationsScreen = () => {
               <Text style={styles.metricNote}>etkileşim</Text>
             </View>
 
-            {/* Loss */}
+            {/* Loss kutusu egitim sonunda kalan hatayi ozetler. */}
             <View style={styles.metricBox}>
               <Text style={styles.metricLabel}>Final Loss</Text>
               <Text style={styles.metricValue}>
@@ -270,7 +272,7 @@ const RecommendationsScreen = () => {
             </View>
           </View>
 
-          {/* Weights */}
+          {/* Agirliklar bolumu hangi hibrit karisimin kullanildigini aciklar. */}
           {(mlMetrics.weights_used || mlMetrics.weights) && (
             <View style={styles.weightsRow}>
               <Text style={styles.weightsLabel}>Ağırlıklar:</Text>
@@ -318,7 +320,7 @@ const RecommendationsScreen = () => {
           onPress={() => handleProductClick(item)}
           activeOpacity={0.7}
         >
-          {/* Rank + Score Header */}
+          {/* Kart basligi sira ve toplam skoru ayni satirda gosterir. */}
           <View style={styles.cardHeader}>
             <View style={styles.rankContainer}>
               <Text style={styles.rankText}>{getRankEmoji(index)}</Text>
@@ -331,7 +333,7 @@ const RecommendationsScreen = () => {
             </View>
           </View>
 
-          {/* Similarity Bar */}
+          {/* Benzerlik cubugu skoru gorsel olarak goreceli hale getirir. */}
           <View style={styles.similarityBarBg}>
             <View style={[styles.similarityBarFill, { width: `${barWidth}%`, backgroundColor: scoreColor }]} />
           </View>
@@ -353,14 +355,14 @@ const RecommendationsScreen = () => {
                 <Text style={styles.brand}>{product.brand}</Text>
               ) : null}
               
-              {/* Reason chip - why this product is recommended */}
+              {/* Neden etiketi, urunun neden listede oldugunu kisaca aciklar. */}
               <View style={styles.reasonChip}>
                 <FontAwesome name="lightbulb-o" size={12} color="#7B1FA2" />
                 <Text style={styles.reasonText}>{item.reason}</Text>
               </View>
 
-              {/* Skor dökümü aynı hybrid weight setini gösterir; bu sayede
-                  kullanıcı hangi model karışımının öneriyi taşıdığını görebilir. */}
+              {/* Skor dokumu toplam skoru aktif agirliklara gore yaklasik parcaliyor.
+                  Ornek: toplam skor 0.90 ve NCF agirligi 0.40 ise NCF katkisi 0.36 gorunur. */}
               <View style={styles.scoreBreakdown}>
                 <Text style={styles.scoreBreakdownItem}>
                   NCF: {(item.score * (activeWeights.ncf ?? 0)).toFixed(2)}
@@ -395,7 +397,7 @@ const RecommendationsScreen = () => {
           </View>
         </TouchableOpacity>
 
-        {/* Action buttons */}
+        {/* Aksiyon satiri hem istek listesi hem de oneri geri bildirimi icin tek alandir. */}
         <View style={styles.actions}>
           <TouchableOpacity
             style={[styles.wishlistButton, inWishlist && styles.disabledButton]}
@@ -418,6 +420,7 @@ const RecommendationsScreen = () => {
             accessibilityLabel="Bu öneriyi beğendim"
             testID={`like-feedback-${item.id ?? product.id}`}
           >
+            {/* Begen butonu tiklamayi pozitif sinyal olarak kaydeder. */}
             <FontAwesome name="thumbs-up" size={14} color="#4CAF50" />
             <Text style={styles.likeButtonText}>Beğendim</Text>
           </TouchableOpacity>
@@ -428,6 +431,7 @@ const RecommendationsScreen = () => {
             accessibilityLabel="Bu öneriyi gösterme"
             testID={`dismiss-feedback-${item.id ?? product.id}`}
           >
+            {/* Gosterme butonu karti listeden cikarir ve backend'e sert exclude sinyali yollar. */}
             <FontAwesome name="thumbs-down" size={14} color="#F44336" />
             <Text style={styles.dismissButtonText}>Gösterme</Text>
           </TouchableOpacity>
@@ -457,7 +461,7 @@ const RecommendationsScreen = () => {
         }
         ListHeaderComponent={
           <View>
-            {/* Header */}
+            {/* Baslik alani ekranin ML baglamini tanitir. */}
             <View style={styles.header}>
               <View>
                 <Text style={styles.headerTitle}>🤖 ML Önerileri</Text>
@@ -475,9 +479,11 @@ const RecommendationsScreen = () => {
               )}
             </View>
 
-            {/* ML Metrics Card */}
+            {/* ML metrik karti gelistirme amacli tanisal bilgileri gosterir. */}
             {renderMLMetricsCard()}
 
+            {/* Kategori ciplari mevcut sonuc listesinden uretilir; bu sayede
+                filtreler backend'den ayri metadata beklemeden her zaman guncel kalir. */}
             <View style={styles.categoryFilterSection}>
               <ScrollView
                 horizontal
@@ -506,7 +512,7 @@ const RecommendationsScreen = () => {
               </ScrollView>
             </View>
 
-            {/* Recommendation count */}
+            {/* Oneri sayisi kullaniciya filtre sonrasi kalan sonucu ozetler. */}
             {filteredRecommendations.length > 0 && (
               <View style={styles.countRow}>
                 <Text style={styles.countText}>
@@ -583,7 +589,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0e6f6',
   },
 
-  // ── ML Metrics Card ──
+  // ML metrik karti
   metricsCard: {
     backgroundColor: '#fff',
     borderRadius: 16,
@@ -699,7 +705,7 @@ const styles = StyleSheet.create({
     color: '#999',
   },
 
-  // ── Count row ──
+  // Oneri sayisi satiri
   countRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -745,7 +751,7 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
 
-  // ── Product Card ──
+  // Urun karti
   card: {
     backgroundColor: '#fff',
     borderRadius: 16,
@@ -792,7 +798,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
 
-  // ── Similarity Bar ──
+  // Benzerlik cubugu
   similarityBarBg: {
     height: 4,
     backgroundColor: '#f0f0f0',

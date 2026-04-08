@@ -1,5 +1,5 @@
 """
-Adaptive hybrid-weight tests for the recommendation engine.
+Oneri motorundaki adaptif hibrit agirlik davranisini dogrulayan testler.
 """
 
 from decimal import Decimal
@@ -15,14 +15,14 @@ User = get_user_model()
 
 
 def _build_recommender_for_unit_test():
-    """Create a lightweight recommender instance without singleton boot side effects."""
+    """Singleton yukleme yan etkileri olmadan hafif bir recommender ornegi kurar."""
     recommender = object.__new__(HybridRecommender)
     recommender._last_runtime_weights = {}
     return recommender
 
 
 def test_cold_start_user_gets_high_popularity_weight():
-    """0 etkileşimli kullanıcı için popularity ağırlığı >= 0.7 olmalı."""
+    """0 etkilesimli kullanicida populerlik agirligi baskin olmali."""
     recommender = _build_recommender_for_unit_test()
     ncf, content, popularity = recommender._get_adaptive_weights({})
 
@@ -32,7 +32,7 @@ def test_cold_start_user_gets_high_popularity_weight():
 
 
 def test_active_user_gets_high_ncf_weight():
-    """25 etkileşimli kullanıcı için ncf ağırlığı >= 0.5 olmalı."""
+    """Yuksek etkilesimli kullanicida NCF agirligi baskin olmali."""
     recommender = _build_recommender_for_unit_test()
     interactions = {product_id: 1.0 for product_id in range(1, 26)}
     ncf, content, popularity = recommender._get_adaptive_weights(interactions)
@@ -44,7 +44,7 @@ def test_active_user_gets_high_ncf_weight():
 
 @pytest.mark.django_db
 def test_recommendation_list_returns_weights_used_for_cold_start():
-    """Recommendation API response should expose adaptive weights for frontend score breakdown."""
+    """API, frontend skor dokumu icin kullanilan agirliklari dondurmeli."""
     category = Category.objects.create(name='Adaptive Weight Category')
     product = Product.objects.create(
         name='Önerilen Ürün',
@@ -69,6 +69,8 @@ def test_recommendation_list_returns_weights_used_for_cold_start():
     client.force_authenticate(user=user)
     response = client.get('/api/v1/recommendations/')
 
+    # Bu alanlar mobil ekrandaki skor kirilimini besledigi icin API seviyesinde
+    # dogruluyoruz; soguk baslangicta NCF sifir, populerlik ise en yuksek olmalidir.
     assert response.status_code == 200
     assert response.data['ml_metrics']['weights_used']['ncf'] == pytest.approx(0.0)
     assert response.data['ml_metrics']['weights_used']['content'] == pytest.approx(0.2)

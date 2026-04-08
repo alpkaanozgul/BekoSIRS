@@ -1,5 +1,5 @@
 """
-Feedback loop tests for clicked and dismissed recommendation signals.
+Tiklama ve dismiss sinyallerinin geri besleme etkisini dogrulayan testler.
 """
 
 from decimal import Decimal
@@ -16,13 +16,13 @@ User = get_user_model()
 
 
 class _NCFStub:
-    """Minimal NCF stub so recommend() can run content-only unit scenarios."""
+    """recommend() cagrisi icerik odakli senaryolarda calissin diye minimal NCF stub'i."""
 
     is_trained = False
 
 
 def _build_content_stub(products):
-    """Create a deterministic content model stub with strong cross-similarity."""
+    """Benzerlik matrisi sabit bir icerik stub'i kurarak testi deterministik yapar."""
     content = object.__new__(ContentBasedModel)
     content.is_trained = True
     content.products_df = pd.DataFrame(
@@ -45,7 +45,7 @@ def _build_content_stub(products):
 
 
 def _build_recommender(content):
-    """Create a lightweight recommender configured for deterministic unit tests."""
+    """Sadece gerekli helper'lari olan hafif ve deterministik recommender kurar."""
     recommender = object.__new__(HybridRecommender)
     recommender.content = content
     recommender.ncf = _NCFStub()
@@ -60,7 +60,7 @@ def _build_recommender(content):
 
 @pytest.mark.django_db
 def test_clicked_recommendation_boosts_future_score():
-    """Tıklanan öneri, sonraki recommendation çağrısında benzer ürün üretmeli."""
+    """Tiklanan oneri, sonraki cagrida benzer urun icin pozitif sinyal olusturmali."""
     category = Category.objects.create(name='Feedback Category')
     seed_product = Product.objects.create(
         name='Kaynak Ürün',
@@ -84,6 +84,7 @@ def test_clicked_recommendation_boosts_future_score():
 
     recommender = _build_recommender(_build_content_stub([seed_product, candidate_product]))
 
+    # Ilk cagrida hic davranis sinyali yoktur; bu nedenle benzer urun cikmamasi beklenir.
     baseline = recommender.recommend(
         user,
         top_n=5,
@@ -91,6 +92,7 @@ def test_clicked_recommendation_boosts_future_score():
         exclude_ids={seed_product.id},
     )
 
+    # Tiklanan onceki kart gelecekteki onerilere pozitif geri besleme olarak yazilir.
     Recommendation.objects.create(
         customer=user,
         product=seed_product,
@@ -99,6 +101,7 @@ def test_clicked_recommendation_boosts_future_score():
         clicked=True,
     )
 
+    # Ayni cagrinin ikinci kosusunda tiklama sinyali benzer adayi one cikarmalidir.
     boosted = recommender.recommend(
         user,
         top_n=5,
@@ -114,7 +117,7 @@ def test_clicked_recommendation_boosts_future_score():
 
 @pytest.mark.django_db
 def test_dismissed_product_excluded_from_recommendations():
-    """Dismissed ürün recommendation adayları arasında olsa bile sonuçta görünmemeli."""
+    """Dismiss edilen urun adaylar arasinda olsa bile son listede gorunmemeli."""
     category = Category.objects.create(name='Dismiss Category')
     seed_product = Product.objects.create(
         name='İlgi Ürünü',
@@ -147,6 +150,7 @@ def test_dismissed_product_excluded_from_recommendations():
         dismissed=True,
     )
 
+    # Dismiss sert exclude olarak yorumlandigi icin skor alsa bile nihai listede kalamaz.
     results = recommender.recommend(
         user,
         top_n=5,

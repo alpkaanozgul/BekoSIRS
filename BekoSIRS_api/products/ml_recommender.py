@@ -111,37 +111,42 @@ METRICS_PATH = os.path.join(ML_MODELS_DIR, 'metrics.pkl')
 
 
 # ---------------------------------------------------------------------------
-# Time-aware scoring helpers
+# Zamana duyarli puan yardimcilari
 # ---------------------------------------------------------------------------
 def temporal_weight(interaction_date, half_life_days=30):
     """
-    Compute an exponential decay multiplier for time-sensitive interactions.
+    Zamana duyarli bir etkilesim icin ustel curume katsayisi hesaplar.
 
-    We use half-life based decay because it is easy to reason about:
-    every `half_life_days` window halves the original contribution instead of
-    dropping it abruptly at a fixed threshold.
+    Args:
+        interaction_date: Etkilesimin olustugu tarih ya da zaman damgasi.
+        half_life_days: Katkinin yarilanacagi gun sayisi. Ornegin 30 ise
+            30 gunluk bir etkilesim 0.5 agirlik alir.
+
+    Yari omur tabanli ustel curume secildi cunku keskin bir esik koymak yerine
+    etkilesimi yumusak sekilde azaltir ve "her 30 gunde yariya iner" diye
+    urun ekiplerine kolayca anlatilabilir.
     """
-    # Some legacy rows may not have a timestamp; keeping full weight is safer
-    # than discarding a valid interaction signal entirely.
+    # Bazi eski kayitlarda zaman damgasi olmayabilir; gecerli bir sinyali
+    # tamamen silmek yerine tam agirlik vermek daha emniyetli bir varsayimdir.
     if interaction_date is None:
         return 1.0
 
     normalized_date = interaction_date
     if isinstance(normalized_date, dt_date) and not isinstance(normalized_date, dt_datetime):
-        # Purchase rows store only a calendar date, so we normalize them to the
-        # start of that day in UTC to keep the decay formula consistent.
+        # Satin alma kayitlari yalnizca gun tuttugu icin tum veri tiplerini
+        # ayni formulde kullanabilmek adina gun basina normalize ediyoruz.
         normalized_date = dt_datetime.combine(normalized_date, dt_time.min)
 
     if normalized_date.tzinfo is None:
-        # Recommendation timestamps should be compared in the same timezone so
-        # the half-life behaves deterministically across environments.
+        # Tum tarihler ayni saat diliminde olmali; aksi halde ayni veri farkli
+        # ortamlarda farkli yari omur sonucuna gidebilir.
         normalized_date = normalized_date.replace(tzinfo=dt_timezone.utc)
 
     now = dt_datetime.now(dt_timezone.utc)
     days_old = max(0, (now - normalized_date).days)
 
-    # Exponential decay keeps recent activity dominant while still preserving
-    # a diminishing contribution from older interactions.
+    # Ustel curume formulu: exp(-ln(2) * gun_sayisi / yari_omur)
+    # Ornek: yari omur 30 ise 30 gunluk etkilesim 0.5, 60 gunluk etkilesim 0.25 olur.
     return math.exp(-math.log(2) * days_old / half_life_days)
 
 
@@ -982,11 +987,20 @@ class HybridRecommender:
 
     def recommend(self, user, top_n=10, ignore_cache=False, exclude_ids=None):
         """
-        Main recommendation entry point.
-        
-        Returns list of dicts: [{'product': Product, 'product_id': int, 'score': float, 'reason': str}]
+        Kullanici icin hibrit oneri listesini uretir.
+
+        Args:
+            user: Oneri alinacak kullanici nesnesi.
+            top_n: Donulecek en yuksek skorlu urun sayisi.
+            ignore_cache: True ise etkilesim cache'i yeniden hesaplanir.
+            exclude_ids: Listeye girmemesi gereken ek urun kimlikleri.
+
+        Sahip olunan, dismiss edilen ve disaridan gelen exclude listeleri tek
+        havuzda birlestirilir; bu yontem aday filtrelemeyi tek noktadan ve
+        tutarli sekilde yonetmeyi kolaylastirir.
         """
-        # Auto-train content model if not loaded
+        # Icerik modeli bellekte hazir degilse once egitiyoruz; boylece sistem
+        # bos liste donmek yerine en azindan icerik tabanli aday uretebilir.
         if not self.content.is_trained:
             self.content.train(verbose=False)
             if self.content.is_trained:
@@ -997,26 +1011,30 @@ class HybridRecommender:
 
         exclude_ids = set(exclude_ids or [])
 
-        # Gather user's interaction history
+        # Kullanici sinyalleri ve dislanacak urunler once tek yerde toplanir;
+        # daha sonra her puan kaynagi ayni aday havuzu uzerinde calisir.
         user_interactions = self._get_user_interactions(user, ignore_cache)
         owned_product_ids = self._get_owned_product_ids(user)
         dismissed_product_ids = self._get_dismissed_product_ids(user)
-        exclude_ids.update(owned_product_ids)  # Don't recommend already purchased items
-        # Dismissals express an explicit "do not show again" preference, so we
-        # remove them from the candidate pool instead of treating them as soft noise.
+        # Satin alinmis urunler tekrar onerilmez; bu akista "zaten sahip" bilgisi
+        # kesin bir engel oldugu icin puan kirmak yerine dogrudan exclude edilir.
+        exclude_ids.update(owned_product_ids)
+        # Dismiss sinyali "bunu tekrar gosterme" anlamina gelir; bu nedenle
+        # yumusak negatif skor yerine sert exclude olarak uygulanir.
         exclude_ids.update(dismissed_product_ids)
 
-        # Adaptive weights make cold-start users rely on safer popularity
-        # signals while active users get stronger personalized NCF ranking.
+        # Adaptif agirliklar kullanicinin etkilesim derinligine gore secilir.
+        # Soguk baslangicta populerlik daha guvenilirken aktif profilde NCF agir basar.
         weight_details = self._build_weight_details(user_interactions)
         self._last_runtime_weights[user.id] = weight_details
 
         final_scores = {}
-        reasons = {}  # Stores (source_type, extra_info) tuples
+        reasons = {}  # (kaynak_tipi, ek_bilgi) ikililerini saklar.
 
         all_product_ids = self.content.products_df['id'].tolist()
 
-        # ── 1. NCF Scores ──
+        # 1. NCF skorlari
+        # NCF skorlari yeterli etkilesimi olan kullanicida ana kisilestirme sinyalidir.
         if self.ncf.is_trained:
             ncf_scores = self.ncf.predict_for_user(
                 user.id, all_product_ids, self.content.products_df
@@ -1025,11 +1043,14 @@ class HybridRecommender:
                 max_ncf = max(ncf_scores.values()) or 1
                 for pid, score in ncf_scores.items():
                     if pid not in exclude_ids:
+                        # Normalize edilen katki = (aday_skoru / en_yuksek_skor) * ncf_agirligi
+                        # Ornek: 0.8 / 1.0 * 0.6 = 0.48. Bu, farkli model olceklerini ayni banda getirir.
                         normalized = (score / max_ncf) * weight_details['ncf']
                         final_scores[pid] = normalized
                         reasons[pid] = ('ncf', None)
 
-        # ── 2. Content-Based Scores ──
+        # 2. Icerik tabanli skorlar
+        # Icerik tabanli skorlar benzer urun semantiklerini kullanarak ilgiyi genisletir.
         if self.content.is_trained and user_interactions:
             content_scores = self.content.get_user_content_scores(
                 user_interactions, exclude_ids
@@ -1038,62 +1059,73 @@ class HybridRecommender:
                 max_content = max(content_scores.values()) or 1
                 for pid, score in content_scores.items():
                     if pid not in exclude_ids:
+                        # Icerik katkisi da ayni olcege cekilir.
+                        # Ornek: 0.5 / 0.5 * 0.3 = 0.3. En iyi icerik adayi agirligin tamamini alir.
                         normalized = (score / max_content) * weight_details['content']
                         final_scores[pid] = final_scores.get(pid, 0) + normalized
                         if pid not in reasons:
                             reasons[pid] = ('content', None)
 
-        # ── 3. Popularity Scores (cold-start fallback) ──
+        # 3. Populerlik skorlari
         popularity_scores = self._get_popularity_scores()
         if popularity_scores:
+            # Populerlik katmani soguk baslangicta emniyet agirligi olarak calisir.
             max_pop = max(popularity_scores.values()) or 1
             for pid, score in popularity_scores.items():
                 if pid not in exclude_ids:
+                    # Populerlik de 0-1 bandina cekilip agirlikla carpiliyor.
+                    # Ornek: 12 / 15 * 0.8 = 0.64. Boylesi yeni kullanicida listeyi dengeler.
                     normalized = (score / max_pop) * weight_details['popularity']
                     final_scores[pid] = final_scores.get(pid, 0) + normalized
                     if pid not in reasons:
                         reasons[pid] = ('popular', None)
 
-        # ── 4. Search History Boost ──
+        # 4. Arama gecmisi bonusu
         search_boosts = self._get_search_boosts(user)
+        # Arama terimleri acik niyet sinyali oldugu icin agirliklara dogrudan ek bonus veriyoruz.
         for pid, boost in search_boosts.items():
             if pid not in exclude_ids:
                 final_scores[pid] = final_scores.get(pid, 0) + boost
                 reasons[pid] = ('search', None)
 
-        # ── 5. Price Sensitivity Boost ──
+        # 5. Fiyat duyarliligi bonusu
         price_boosts = self._get_price_sensitivity_boosts(user)
         for pid, boost in price_boosts.items():
             if pid not in exclude_ids and pid in final_scores:
+                # Fiyat araligi uyumu yalnizca mevcut adaylara eklenir.
+                # Ornek: mevcut skor 0.62 ise 0.1 bonus sonrasi 0.72 olur.
                 final_scores[pid] += boost
                 if boost > 0.1 and reasons.get(pid, (None,))[0] not in ('search',):
                     reasons[pid] = ('price', None)
 
-        # ── 6. New Product Discovery Boost ──
+        # 6. Yeni urun kesif bonusu
         for pid, boost in self._get_new_product_boost().items():
             if pid not in exclude_ids:
+                # Kucuk sabit bonus secildi; ornegin 0.4 ekleme yeni urunu gorunur
+                # kilar ama halihazirda cok guclu bir adayi tamamen bastirmaz.
                 final_scores[pid] = final_scores.get(pid, 0) + boost
                 if boost > 0 and reasons.get(pid, (None,))[0] not in ('search', 'price'):
                     reasons[pid] = ('new', None)
 
-        # ── Format and return ──
+        # Sonucu bicimlendir ve dondur
+        # Tum kaynaklardan gelen puanlar birlestirilir ve son sirali API cevabina cevrilir.
         return self._format_results(final_scores, reasons, top_n, exclude_ids, user=user)
 
-    # ───────────────────────────────────────────────────────────────────────
-    # Helper Methods
-    # ───────────────────────────────────────────────────────────────────────
+    # -----------------------------------------------------------------------
+    # Yardimci metodlar
+    # -----------------------------------------------------------------------
 
     def _count_meaningful_interactions(self, user_interactions):
         """
-        Count positive interaction entries used for user-tier classification.
+        Kullanici seviyesini belirlemek icin pozitif etkilesimleri sayar.
 
-        We intentionally ignore zero/negative entries so cold-start detection is
-        not distorted by future negative-feedback signals such as dismissals.
+        Sifir ve negatif degerleri bilerek dahil etmiyoruz; boylece dismiss gibi
+        sinyaller soguk baslangic tespitini yapay olarak sisirmez.
         """
         return sum(1 for score in user_interactions.values() if score > 0)
 
     def _get_user_tier(self, user_interactions):
-        """Map interaction depth to a human-readable recommendation tier."""
+        """Etkilesim derinligini okunabilir bir oneri seviyesine cevirir."""
         interaction_count = self._count_meaningful_interactions(user_interactions)
         if interaction_count == 0:
             return 'cold_start'
@@ -1105,24 +1137,33 @@ class HybridRecommender:
 
     def _get_adaptive_weights(self, user_interactions):
         """
-        Choose hybrid weights dynamically from the user's interaction depth.
+        Kullanici etkilesim derinligine gore hibrit agirliklari secer.
 
-        Cold-start users get popularity-heavy weights because collaborative
-        models are unreliable without enough history. As the user engages more,
-        we progressively increase the NCF share to favor personalization.
+        Args:
+            user_interactions: {product_id: skor} biciminde pozitif etkilesim haritasi.
+
+        Returns:
+            (ncf, content, popularity) agirlik uclusu.
+
+        Bu esik yapisi secildi cunku soguk baslangicta populerlik daha guvenilir,
+        etkilesim biriktikce de NCF kisilestirme kalitesini daha iyi tasir.
         """
         interaction_count = self._count_meaningful_interactions(user_interactions)
 
+        # 0 etkilesim: isbirlikci filtreleme guvenilmezdir, bu yuzden populerlik %80'e cikar.
         if interaction_count == 0:
             return (0.0, 0.2, 0.8)
+        # 1-4 etkilesim: ilk tercihler gorunur, ama populerlik hala ana emniyet agidir.
         if interaction_count < 5:
             return (0.2, 0.3, 0.5)
+        # 5-19 etkilesim: icerik ve NCF birlikte calisir, dengeli faz budur.
         if interaction_count < 20:
             return (0.4, 0.3, 0.3)
+        # 20+ etkilesim: olgun profil, NCF %60 ile ana surucu haline gelir.
         return (0.6, 0.3, 0.1)
 
     def _build_weight_details(self, user_interactions):
-        """Build the response-ready adaptive weight payload for one user."""
+        """Tek kullanici icin API'ye hazir adaptif agirlik sozlugunu kurar."""
         ncf_weight, content_weight, popularity_weight = self._get_adaptive_weights(user_interactions)
         return {
             'ncf': ncf_weight,
@@ -1134,10 +1175,10 @@ class HybridRecommender:
 
     def get_runtime_weight_details(self, user, ignore_cache=False):
         """
-        Return adaptive runtime weights for the given user.
+        Verilen kullanici icin calisma anindaki adaptif agirliklari dondurur.
 
-        Views can call this even when recommendations are served from cache so
-        the frontend always receives the same weight logic the scorer would use.
+        View katmani cache'ten donse bile ayni helper'i cagirdiginda frontend,
+        skorlama motorunun kullandigi agirliklarla birebir ayni payload'u alir.
         """
         cached_details = self._last_runtime_weights.get(user.id)
         if cached_details is not None and not ignore_cache:
@@ -1149,7 +1190,7 @@ class HybridRecommender:
         return weight_details
 
     def _get_user_interactions(self, user, ignore_cache=False):
-        """Gather user interaction scores: {product_id: weight}."""
+        """Kullanici etkilesim skorlarini {product_id: agirlik} biciminde toplar."""
         from .models import ProductOwnership, Review, WishlistItem, ViewHistory, Recommendation
 
         cache_key = f'ml_user_interactions_{user.id}'
@@ -1160,7 +1201,7 @@ class HybridRecommender:
 
         interactions = {}
 
-        # Purchases are a durable preference signal, so we decay them slowly.
+        # Satin almalar kalici tercih sinyalidir; bu nedenle yari omurleri daha uzundur.
         for ownership in ProductOwnership.objects.filter(
             customer=user
         ).values('product_id', 'purchase_date'):
@@ -1172,7 +1213,7 @@ class HybridRecommender:
                 interactions.get(ownership['product_id'], 0) + (5.0 * decay)
             )
 
-        # Positive reviews stay useful for longer because they capture explicit intent.
+        # Pozitif yorum acik memnuniyet bildirir; bu nedenle etkisi view'dan daha uzun surer.
         for r in Review.objects.filter(
             customer=user, rating__gt=3
         ).values('product_id', 'rating', 'created_at'):
@@ -1184,8 +1225,8 @@ class HybridRecommender:
                 interactions.get(r['product_id'], 0) + (float(r['rating']) * decay)
             )
 
-        # Wishlist intent can go stale faster than a purchase but should still
-        # outlive casual browsing, so it gets a medium half-life.
+        # Istek listesi satin alma kadar kalici degildir ama rastgele gezinmeden
+        # daha guclu sinyal verir; bu yuzden orta seviye yari omur kullanilir.
         for item in WishlistItem.objects.filter(
             wishlist__customer=user
         ).values('product_id', 'added_at'):
@@ -1197,8 +1238,8 @@ class HybridRecommender:
                 interactions.get(item['product_id'], 0) + (3.0 * decay)
             )
 
-        # Views reflect short-term intent, so they decay fastest. We still cap
-        # view_count to prevent one heavily refreshed page from dominating.
+        # Goruntuleme kisa vadeli niyeti yansitir; bu nedenle en hizli bunlar curur.
+        # view_count 15 ile sinirlanir ki tek sayfayi yenilemek tum siralamayi ezmesin.
         for vh in ViewHistory.objects.filter(customer=user).values('product_id', 'view_count', 'viewed_at'):
             weight = min(vh['view_count'], 15)
             decay = temporal_weight(
@@ -1207,8 +1248,8 @@ class HybridRecommender:
             )
             interactions[vh['product_id']] = interactions.get(vh['product_id'], 0) + (weight * decay)
 
-        # Clicked recommendations are a stronger signal than a plain view
-        # because the user actively followed a recommendation card.
+        # Tiklanan oneriler siradan view'dan daha gucludur cunku kullanici
+        # kart uzerinden bilincli bir aksiyon almistir.
         for rec in Recommendation.objects.filter(
             customer=user, clicked=True
         ).values('product_id', 'created_at'):
@@ -1222,7 +1263,7 @@ class HybridRecommender:
         return interactions
 
     def _get_owned_product_ids(self, user):
-        """Get IDs of products the user already owns."""
+        """Kullanicinin zaten sahip oldugu urun kimliklerini dondurur."""
         from .models import ProductOwnership
         return set(
             ProductOwnership.objects.filter(
@@ -1232,10 +1273,13 @@ class HybridRecommender:
 
     def _get_dismissed_product_ids(self, user):
         """
-        Return products the user explicitly dismissed from recommendations.
+        Kullanicinin acikca reddettigi oneri urun kimliklerini dondurur.
 
-        Dismiss is treated as a hard exclude because the UI wording means
-        "do not show this again", which is stronger than a low relevance score.
+        Args:
+            user: Dismiss tercihleri okunacak kullanici.
+
+        Dismiss sinyali sert exclude kabul edilir cunku arayuzdeki anlami
+        "bunu bir daha gosterme"dir; dusuk ilgi tahmini kadar yumusak degildir.
         """
         from .models import Recommendation
 
@@ -1289,17 +1333,20 @@ class HybridRecommender:
 
     def _get_new_product_boost(self):
         """
-        Return a short-lived boost for recent in-stock catalog additions.
+        Son donemde eklenen stoktaki urunler icin kisa omurlu bonus dondurur.
 
-        Popularity-heavy systems naturally underserve fresh products because
-        they start with zero interaction history. This helper injects a small,
-        time-boxed exploration bonus so users can discover new arrivals.
+        Bu helper parametre almaz; dogrudan canli katalogdaki `created_at` ve
+        stok bilgisini okur. Bu yontem secildi cunku populerlik odakli sistemler
+        sifir etkilesimle baslayan yeni urunleri geri plana iter, burada ise
+        sinirli bir kesif bonusu ile o bosluk kapatilir.
         """
         from .models import Product
 
         boosts = {}
         now = dt_datetime.now(dt_timezone.utc)
 
+        # Yalnizca stokta olan ve son 30 gunde eklenen urunleri aliyoruz; stok
+        # filtresi kullanicinin hemen satin alamayacagi urunleri one cikarmayi engeller.
         recent_products = Product.objects.filter(
             created_at__gte=now - timedelta(days=self.NEW_PRODUCT_MAX_AGE_DAYS),
             stock__gt=0,
@@ -1314,8 +1361,8 @@ class HybridRecommender:
                 created_at = created_at.replace(tzinfo=dt_timezone.utc)
 
             days_old = max(0, (now - created_at).days)
-            # The boost decays in coarse buckets to keep the behavior easy to
-            # explain to product teams and stable across retraining cycles.
+            # Kaba kovalar secildi cunku urun ekibine anlatmasi kolaydir:
+            # 3 gunluk urun 0.4, 10 gunluk urun 0.25, 20 gunluk urun 0.1 bonus alir.
             if days_old <= 7:
                 boosts[product['id']] = 0.4
             elif days_old <= 14:
@@ -1381,11 +1428,11 @@ class HybridRecommender:
 
     def _normalize_metric_input(self, recommendation):
         """
-        Normalize recommendation payloads into metric-friendly primitives.
+        Oneri payload'unu metrik hesaplamaya uygun basit alanlara indirger.
 
-        The recommendation screen can be fed either model instances or serialized
-        dictionaries, so we flatten both shapes into the same structure before
-        computing diversity and coverage numbers.
+        Recommendation ekrani bazen model nesnesi, bazen serilestirilmis sozluk
+        alabilir. Bu helper iki bicimi de ayni yapida duzlestirerek cesitlilik ve
+        kapsama hesaplarinin tek kod yolundan cikmasini saglar.
         """
         product_id = None
         category_name = None
@@ -1426,11 +1473,14 @@ class HybridRecommender:
 
     def _compute_advanced_metrics(self, recommendations_list, all_products_count=None):
         """
-        Compute list-level recommendation quality metrics for diagnostics.
+        Calisma anindaki oneri listesi icin kalite metrikleri hesaplar.
 
-        These metrics intentionally evaluate the concrete list shown to the user
-        instead of only offline training data, because diversity and coverage
-        are properties of the final ranked slate.
+        Args:
+            recommendations_list: API'ye donulen sirali oneri listesi.
+            all_products_count: Toplam katalog boyutu. Verilmezse veritabanindan okunur.
+
+        Bu yontem secildi cunku cesitlilik ve kapsama gibi metrikler egitim
+        verisinden degil, kullanicinin gercekte gordugu son listeden anlam kazanir.
         """
         normalized_items = [
             self._normalize_metric_input(recommendation)
@@ -1440,10 +1490,8 @@ class HybridRecommender:
         if all_products_count is None:
             from .models import Product
 
-            # Coverage should reflect the live catalog the business currently
-            # offers, not only the last persisted model snapshot. We therefore
-            # use the database count first and fall back to the loaded model
-            # only if the runtime catalog is unexpectedly empty.
+            # Katalog kapsamasini canli katalogla hesapliyoruz; sadece en son
+            # model snapshot'ina bakmak is kurallarina gore eski sayi verebilir.
             all_products_count = Product.objects.count()
             if all_products_count == 0 and self.content.products_df is not None and not self.content.products_df.empty:
                 all_products_count = len(self.content.products_df)
@@ -1454,6 +1502,8 @@ class HybridRecommender:
             if item['category_name']
         ]
         unique_categories = len(set(categories))
+        # Cesitlilik = benzersiz kategori / liste uzunlugu.
+        # Ornek: 2 kategori ve 4 urun varsa skor 0.5 olur.
         diversity_score = unique_categories / max(len(normalized_items), 1)
 
         unique_recommended = len({
@@ -1461,14 +1511,18 @@ class HybridRecommender:
             for item in normalized_items
             if item['product_id'] is not None
         })
+        # Katalog kapsama = benzersiz onerilen urun / toplam katalog.
+        # Ornek: 2 urun / 4 urun = 0.5 kapsama.
         catalog_coverage = unique_recommended / max(int(all_products_count or 0), 1)
 
         scores = [item['score'] for item in normalized_items]
+        # Ortalama skor listenin genel gucunu ozetler.
+        # Ornek: [0.9, 0.6] icin ortalama 0.75 olur.
         avg_recommendation_score = float(np.mean(scores)) if scores else 0.0
 
         prices = [item['price'] for item in normalized_items if item['price'] is not None]
-        # Price variance is a lightweight proxy for intra-list diversity; a list
-        # spanning multiple price bands usually feels less repetitive to users.
+        # Fiyat varyansi liste ici yayilimi olcer.
+        # Ornek: [100, 200] icin varyans 2500 olur; daha yuksek deger farkli bantlari isaret eder.
         price_variance_in_list = float(np.var(prices)) if prices else 0.0
 
         return {

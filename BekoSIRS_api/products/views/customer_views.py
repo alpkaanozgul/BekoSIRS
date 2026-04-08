@@ -548,8 +548,20 @@ class RecommendationViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='click')
     def record_click(self, request, pk=None):
-        """POST /api/recommendations/{id}/click/ - Record click."""
+        """
+        Tiklanan oneriyi pozitif geri bildirim olarak kaydeder.
+
+        Args:
+            request: Oturumdaki kullaniciyi ve endpoint baglamini tasir.
+            pk: Tiklanan recommendation kaydinin kimligi.
+
+        Bu endpoint yalnizca `clicked=True` isaretler; ekstra skor bekletmek
+        yerine basit bir boolean secildi cunku model bunu sonraki agirliklandirmada
+        zaten pozitif sinyal olarak yorumlar.
+        """
         recommendation = self.get_object()
+        # Tiklama acik bir memnuniyet sinyali oldugu icin idempotent bicimde
+        # sadece True yaziyoruz; tekrar tiklamak ek yan etki uretmez.
         recommendation.clicked = True
         recommendation.save()
         return Response({'success': True})
@@ -557,18 +569,24 @@ class RecommendationViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['patch', 'post'], url_path='dismiss')
     def dismiss(self, request, pk=None):
         """
-        Mark a recommendation as dismissed via PATCH or legacy POST.
+        Oneriyi dismiss ederek mevcut kaydi gunceller.
 
-        PATCH is the preferred verb because dismiss mutates an existing
-        recommendation resource, but POST remains enabled for backward
-        compatibility with older mobile/web builds.
+        Args:
+            request: Oturumdaki kullanici ve HTTP metodunu tasir.
+            pk: Dismiss edilecek recommendation kaydinin kimligi.
+
+        PATCH tercih edilir cunku var olan bir kaynagi mutate eder; yine de
+        eski mobil ve web surumleri kirilmasin diye POST destegi korunur.
         """
         recommendation = self.get_object()
+        # Dismiss edilen kayit tekrar listeye girmesin diye hem bayragi hem de
+        # zaman damgasini sakliyoruz; zaman bilgisi denetim ve analiz icin gerekli.
         recommendation.dismissed = True
         recommendation.dismissed_at = timezone.now()
         recommendation.save(update_fields=['dismissed', 'dismissed_at'])
 
-        # Trigger background refresh to generate replacement
+        # Kullanici karti aninda kapatirken arka planda yeni aday uretilir;
+        # boylece istemci ek bir tam yenileme beklemeden deneyim akici kalir.
         self._generate_in_background(request.user)
 
         return Response({

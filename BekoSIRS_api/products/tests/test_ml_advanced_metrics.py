@@ -1,5 +1,5 @@
 """
-Advanced recommendation metric tests for runtime recommendation lists.
+Calisma anindaki oneri listesi metriklerini dogrulayan testler.
 """
 
 from decimal import Decimal
@@ -15,14 +15,14 @@ User = get_user_model()
 
 
 def _build_recommender_for_metrics_unit_test():
-    """Create a lightweight recommender instance without singleton side effects."""
+    """Singleton yan etkilerini tetiklemeden metrik helper'ini test eder."""
     recommender = object.__new__(HybridRecommender)
     recommender._last_runtime_weights = {}
     return recommender
 
 
 def test_advanced_metrics_capture_diversity_coverage_and_price_variance():
-    """Advanced metrics should summarize the visible recommendation list."""
+    """Liste metrikleri cesitlilik, kapsama ve fiyat yayilimini ozetlemeli."""
     recommender = _build_recommender_for_metrics_unit_test()
     metrics = recommender.get_advanced_metrics(
         [
@@ -48,6 +48,7 @@ def test_advanced_metrics_capture_diversity_coverage_and_price_variance():
         all_products_count=4,
     )
 
+    # 2 urun 2 ayri kategoriden geldigi icin cesitlilik 2/2 = 1.0 olmalidir.
     assert metrics['diversity_score'] == pytest.approx(1.0)
     assert metrics['catalog_coverage'] == pytest.approx(0.5)
     assert metrics['avg_recommendation_score'] == pytest.approx(0.75)
@@ -56,7 +57,7 @@ def test_advanced_metrics_capture_diversity_coverage_and_price_variance():
 
 @pytest.mark.django_db
 def test_recommendation_api_returns_advanced_runtime_metrics():
-    """Recommendation API should expose advanced list metrics for the frontend."""
+    """Oneri API'si, frontend icin liste seviyesi metrikleri dondurmeli."""
     category_a = Category.objects.create(name='Kitchen')
     category_b = Category.objects.create(name='Laundry')
     user = User.objects.create_user(
@@ -87,6 +88,8 @@ def test_recommendation_api_returns_advanced_runtime_metrics():
     client.force_authenticate(user=user)
     response = client.get('/api/v1/recommendations/')
 
+    # 10 urunluk cevap 10 urunluk katalogtan geldigi icin kapsama 1.0 beklenir.
+    # Iki kategori 10 urune dagildigi icin cesitlilik 2/10 = 0.2 olur.
     assert response.status_code == 200
     assert len(response.data['recommendations']) == 10
     assert response.data['ml_metrics']['catalog_coverage'] == pytest.approx(1.0)
