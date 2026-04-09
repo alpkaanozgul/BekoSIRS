@@ -15,6 +15,8 @@ import {
 import { FontAwesome } from '@expo/vector-icons';
 import { recommendationAPI, wishlistAPI, viewHistoryAPI, getImageUrl } from '../../services';
 import { useRouter } from 'expo-router';
+import { useLanguage } from '../../context/LanguageContext';
+import { t } from '../../i18n';
 
 interface Recommendation {
   id?: number;
@@ -64,6 +66,7 @@ const RecommendationsScreen = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [wishlistIds, setWishlistIds] = useState<number[]>([]);
   const [showMetrics, setShowMetrics] = useState(true);
+  const { language } = useLanguage();
   const [selectedCat, setSelectedCat] = useState('Tümü');
 
   const getRecommendationCategory = (item: Recommendation) => item.product.category_name || 'Diğer';
@@ -135,12 +138,12 @@ const RecommendationsScreen = () => {
     try {
       await wishlistAPI.addItem(productId);
       setWishlistIds(prev => [...prev, productId]);
-      Alert.alert('Başarılı', `"${productName}" istek listenize eklendi!`);
+      Alert.alert(t('common.success'), `"${productName}" ${t('home.addedToWishlist')}`);
     } catch (error: any) {
       if (error.response?.data?.error) {
-        Alert.alert('Bilgi', error.response.data.error);
+        Alert.alert(t('common.error'), error.response.data.error);
       } else {
-        Alert.alert('Hata', 'Ürün eklenemedi');
+        Alert.alert(t('common.error'), t('home.addFailed'));
       }
     }
   };
@@ -186,11 +189,11 @@ const RecommendationsScreen = () => {
   };
 
   const getScoreLabel = (score: number) => {
-    if (score >= 1.0) return 'Çok Yüksek';
-    if (score >= 0.7) return 'Yüksek';
-    if (score >= 0.4) return 'Orta';
-    if (score >= 0.2) return 'Düşük';
-    return 'Temel';
+    if (score >= 1.0) return t('recs.veryHigh');
+    if (score >= 0.7) return t('recs.high');
+    if (score >= 0.4) return t('recs.medium');
+    if (score >= 0.2) return t('recs.low');
+    return t('recs.basic');
   };
 
   // Sira rozeti, ilk uc adayi tek bakista ayirt etmeyi saglar.
@@ -214,12 +217,12 @@ const RecommendationsScreen = () => {
         <View style={styles.testingBanner}>
           <FontAwesome name="flask" size={14} color="#fff" />
           <Text style={styles.testingBannerText}>
-            TEST MODU — Bu bölüm sadece geliştirme amaçlıdır
+            {t('recs.testMode')}
           </Text>
         </View>
 
         <View style={styles.metricsContent}>
-          <Text style={styles.metricsTitle}>🧠 ML Model Metrikleri</Text>
+          <Text style={styles.metricsTitle}>{t('recs.mlMetrics')}</Text>
           <Text style={styles.metricsSubtitle}>Neural Collaborative Filtering (NCF)</Text>
           
           <View style={styles.metricsGrid}>
@@ -233,7 +236,7 @@ const RecommendationsScreen = () => {
                 {r2 != null ? r2.toFixed(4) : 'N/A'}
               </Text>
               <Text style={styles.metricNote}>
-                {r2 != null && r2 > 0 ? '✅ İyi' : r2 != null ? '⚠️ Daha fazla veri gerekli' : '—'}
+                {r2 != null && r2 > 0 ? t('recs.good') : r2 != null ? t('recs.moreDataNeeded') : '—'}
               </Text>
             </View>
 
@@ -247,17 +250,17 @@ const RecommendationsScreen = () => {
                 {hitRate != null ? `${(hitRate * 100).toFixed(1)}%` : 'N/A'}
               </Text>
               <Text style={styles.metricNote}>
-                {hitRate != null && hitRate > 0.5 ? '✅ İyi' : hitRate != null ? '⚠️ Orta' : '—'}
+                {hitRate != null && hitRate > 0.5 ? t('recs.good') : hitRate != null ? t('recs.moderate') : '—'}
               </Text>
             </View>
 
             {/* Egitim verisi kutusu modelin beslendigi sinyal miktarini gosterir. */}
             <View style={styles.metricBox}>
-              <Text style={styles.metricLabel}>Eğitim Verisi</Text>
+              <Text style={styles.metricLabel}>{t('recs.trainingData')}</Text>
               <Text style={styles.metricValue}>
                 {mlMetrics.n_interactions ?? '—'}
               </Text>
-              <Text style={styles.metricNote}>etkileşim</Text>
+              <Text style={styles.metricNote}>{t('recs.interactions')}</Text>
             </View>
 
             {/* Loss kutusu egitim sonunda kalan hatayi ozetler. */}
@@ -275,11 +278,11 @@ const RecommendationsScreen = () => {
           {/* Agirliklar bolumu hangi hibrit karisimin kullanildigini aciklar. */}
           {(mlMetrics.weights_used || mlMetrics.weights) && (
             <View style={styles.weightsRow}>
-              <Text style={styles.weightsLabel}>Ağırlıklar:</Text>
+              <Text style={styles.weightsLabel}>{t('recs.weights')}</Text>
               <Text style={styles.weightsText}>
                 NCF: {((activeWeights.ncf ?? 0) * 100).toFixed(0)}% | 
-                İçerik: {((activeWeights.content ?? 0) * 100).toFixed(0)}% | 
-                Popülerlik: {((activeWeights.popularity ?? 0) * 100).toFixed(0)}%
+                {t('recs.content')}: {((activeWeights.content ?? 0) * 100).toFixed(0)}% | 
+                {t('recs.popularity')}: {((activeWeights.popularity ?? 0) * 100).toFixed(0)}%
               </Text>
             </View>
           )}
@@ -291,7 +294,7 @@ const RecommendationsScreen = () => {
           )}
 
           {trainedAt && (
-            <Text style={styles.trainedAt}>Son eğitim: {trainedAt}</Text>
+            <Text style={styles.trainedAt}>{t('recs.lastTrained')}: {trainedAt}</Text>
           )}
         </View>
 
@@ -299,7 +302,7 @@ const RecommendationsScreen = () => {
           style={styles.hideMetricsBtn}
           onPress={() => setShowMetrics(false)}
         >
-          <Text style={styles.hideMetricsBtnText}>Metrikleri Gizle</Text>
+          <Text style={styles.hideMetricsBtnText}>{t('recs.hideMetrics')}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -389,7 +392,7 @@ const RecommendationsScreen = () => {
                   ]}
                 >
                   <Text style={styles.stockText}>
-                    {isInStock ? 'Stokta' : 'Stok Yok'}
+                    {isInStock ? t('home.inStock') : t('home.outOfStock')}
                   </Text>
                 </View>
               </View>
@@ -410,7 +413,7 @@ const RecommendationsScreen = () => {
               color={inWishlist ? "#9E9E9E" : "#f44336"}
             />
             <Text style={[styles.wishlistButtonText, inWishlist && { color: '#9E9E9E' }]}>
-              {inWishlist ? 'Listede' : 'İstek Listesi'}
+              {inWishlist ? t('home.inWishlist') : t('home.addToWishlist')}
             </Text>
           </TouchableOpacity>
 
@@ -444,7 +447,7 @@ const RecommendationsScreen = () => {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#7B1FA2" testID="loading-recommendations" />
-        <Text style={styles.loadingText}>ML modeli çalışıyor...</Text>
+        <Text style={styles.loadingText}>{t('recs.loading')}</Text>
       </View>
     );
   }
@@ -464,9 +467,9 @@ const RecommendationsScreen = () => {
             {/* Baslik alani ekranin ML baglamini tanitir. */}
             <View style={styles.header}>
               <View>
-                <Text style={styles.headerTitle}>🤖 ML Önerileri</Text>
+                <Text style={styles.headerTitle}>{t('recs.title')}</Text>
                 <Text style={styles.subtitle}>
-                  Neural Collaborative Filtering ile oluşturuldu
+                  {t('recs.subtitle')}
                 </Text>
               </View>
               {!showMetrics && (
@@ -516,10 +519,10 @@ const RecommendationsScreen = () => {
             {filteredRecommendations.length > 0 && (
               <View style={styles.countRow}>
                 <Text style={styles.countText}>
-                  {filteredRecommendations.length} ürün önerildi
+                  {filteredRecommendations.length} {t('recs.productsRecommended')}
                 </Text>
                 <Text style={styles.countSubtext}>
-                  Aşağı çekerek yenileyin
+                  {t('recs.pullToRefresh')}
                 </Text>
               </View>
             )}
@@ -528,13 +531,9 @@ const RecommendationsScreen = () => {
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <FontAwesome name="lightbulb-o" size={80} color="#ccc" />
-            <Text style={styles.emptyTitle}>
-              {selectedCat === 'Tümü' ? 'Henüz Öneri Yok' : 'Bu Kategoride Öneri Yok'}
-            </Text>
+            <Text style={styles.emptyTitle}>{t('recs.noRecs')}</Text>
             <Text style={styles.emptyText}>
-              {selectedCat === 'Tümü'
-                ? 'Ürünleri görüntüledikçe ML modeli size özel öneriler oluşturacak'
-                : `${selectedCat} kategorisinde şu an öneri bulunmuyor`}
+              {t('recs.noRecsDesc')}
             </Text>
           </View>
         }

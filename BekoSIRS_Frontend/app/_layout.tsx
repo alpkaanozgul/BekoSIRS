@@ -3,6 +3,7 @@ import { Stack, useSegments, useRouter } from 'expo-router';
 import { View, ActivityIndicator, Platform } from 'react-native';
 import { isAuthenticated, getToken } from '../storage/storage.native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { LanguageProvider } from '../context/LanguageContext';
 import * as Notifications from 'expo-notifications';
 import { pushTokenAPI } from '../services';
 
@@ -91,23 +92,25 @@ export default function RootLayout() {
   }
 
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="(drawer)" options={{ headerShown: false }} />
-      <Stack.Screen name="(delivery)" options={{ headerShown: false }} />
-      <Stack.Screen name="login" options={{ headerShown: false }} />
-      <Stack.Screen name="register" options={{ headerShown: false }} />
-      <Stack.Screen
-        name="product/[id]"
-        options={{
-          headerShown: true,
-          headerTitle: 'Ürün Detayı',
-          headerStyle: { backgroundColor: '#000000' },
-          headerTintColor: '#FFFFFF',
-          headerBackTitle: 'Geri',
-          presentation: 'card',
-        }}
-      />
-    </Stack>
+    <LanguageProvider>
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="(drawer)" options={{ headerShown: false }} />
+        <Stack.Screen name="(delivery)" options={{ headerShown: false }} />
+        <Stack.Screen name="login" options={{ headerShown: false }} />
+        <Stack.Screen name="register" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="product/[id]"
+          options={{
+            headerShown: true,
+            headerTitle: 'Ürün Detayı',
+            headerStyle: { backgroundColor: '#000000' },
+            headerTintColor: '#FFFFFF',
+            headerBackTitle: 'Geri',
+            presentation: 'card',
+          }}
+        />
+      </Stack>
+    </LanguageProvider>
   );
 }
 

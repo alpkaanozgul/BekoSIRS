@@ -12,6 +12,8 @@ import {
 } from 'react-native';
 import { FontAwesome } from '@expo/vector-icons';
 import { installmentAPI } from '../../services';
+import { useLanguage } from '../../context/LanguageContext';
+import { t } from '../../i18n';
 
 interface Installment {
     id: number;
@@ -47,6 +49,7 @@ const PaymentsScreen = () => {
     const [expandedPlanId, setExpandedPlanId] = useState<number | null>(null);
     const [installmentsLoading, setInstallmentsLoading] = useState(false);
     const [installmentsMap, setInstallmentsMap] = useState<Record<number, Installment[]>>({});
+    const { language } = useLanguage();
 
     const fetchPlans = useCallback(async () => {
         try {
@@ -90,19 +93,49 @@ const PaymentsScreen = () => {
             setExpandedPlanId(planId);
         } catch (error) {
             console.error('Installments fetch error:', error);
-            Alert.alert('Hata', 'Taksit detayları yüklenemedi');
+            Alert.alert(t('common.error'), t('payments.detailsFailed'));
         } finally {
             setInstallmentsLoading(false);
         }
     };
 
+    const handleConfirmPayment = (installmentId: number, planId: number) => {
+        Alert.alert(
+            t('payments.confirmPayment'),
+            t('payments.confirmPaymentDesc'),
+            [
+                { text: t('payments.cancel'), style: 'cancel' },
+                {
+                    text: t('payments.yesPaid'),
+                    style: 'default',
+                    onPress: async () => {
+                        try {
+                            await installmentAPI.confirmPayment(installmentId);
+                            Alert.alert(t('common.success'), t('payments.paymentSent'));
+                            const response = await installmentAPI.getPlanInstallments(planId);
+                            const data = response.data;
+                            setInstallmentsMap(prev => ({
+                                ...prev,
+                                [planId]: Array.isArray(data) ? data : (data.results || [])
+                            }));
+                        } catch (error: any) {
+                            Alert.alert(t('common.error'), error.response?.data?.error || t('payments.paymentFailed'));
+                        }
+                    },
+                },
+            ]
+        );
+    };
 
     const formatCurrency = (amount: string) => {
-        return parseFloat(amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺';
+        const locale = language === 'tr' ? 'tr-TR' : 'en-US';
+        const symbol = language === 'tr' ? ' ₺' : ' TRY';
+        return parseFloat(amount).toLocaleString(locale, { minimumFractionDigits: 2 }) + symbol;
     };
 
     const formatDate = (dateStr: string) => {
-        return new Date(dateStr).toLocaleDateString('tr-TR', {
+        const locale = language === 'tr' ? 'tr-TR' : 'en-US';
+        return new Date(dateStr).toLocaleDateString(locale, {
             day: 'numeric',
             month: 'short',
             year: 'numeric'
@@ -121,9 +154,9 @@ const PaymentsScreen = () => {
 
     const getDaysLabel = (inst: Installment): string => {
         if (inst.status === 'paid' || inst.status === 'customer_confirmed') return '';
-        if (inst.is_overdue || inst.days_until_due < 0) return `Ödemeniz ${Math.abs(inst.days_until_due)} gün gecikti`;
-        if (inst.days_until_due === 0) return 'Bugün son gün';
-        return `${inst.days_until_due} gün kaldı`;
+        if (inst.is_overdue) return `${Math.abs(inst.days_until_due)} ${t('payments.daysOverdue')}`;
+        if (inst.days_until_due === 0) return t('payments.lastDay');
+        return `${inst.days_until_due} ${t('payments.daysLeft')}`;
     };
 
     const renderInstallment = (inst: Installment, planId: number) => {
@@ -144,7 +177,7 @@ const PaymentsScreen = () => {
 
                 <View style={styles.installmentInfo}>
                     <Text style={styles.installmentAmount}>{formatCurrency(inst.amount)}</Text>
-                    <Text style={styles.installmentDate}>Vade: {formatDate(inst.due_date)}</Text>
+                    <Text style={styles.installmentDate}>{t('payments.dueDate')}: {formatDate(inst.due_date)}</Text>
                     {daysLabel !== '' && (
                         <Text style={[styles.daysLabel, inst.is_overdue && styles.daysLabelOverdue]}>
                             {daysLabel}
@@ -159,6 +192,14 @@ const PaymentsScreen = () => {
                         </Text>
                     </View>
 
+                    {(inst.status === 'pending' || inst.status === 'overdue') && (
+                        <TouchableOpacity
+                            style={[styles.confirmButton, inst.is_overdue && styles.confirmButtonOverdue]}
+                            onPress={() => handleConfirmPayment(inst.id, planId)}
+                        >
+                            <Text style={styles.confirmButtonText}>{t('payments.iPaid')}</Text>
+                        </TouchableOpacity>
+                    )}
                 </View>
             </View>
         );
@@ -182,7 +223,7 @@ const PaymentsScreen = () => {
                         <View>
                             <Text style={styles.productName} numberOfLines={2}>{item.product_name}</Text>
                             <Text style={styles.planInfo}>
-                                {item.installment_count} Taksit • {formatDate(item.start_date)}
+                                {item.installment_count} {t('payments.installments')} • {formatDate(item.start_date)}
                             </Text>
                         </View>
                     </View>
@@ -197,15 +238,15 @@ const PaymentsScreen = () => {
                 <View style={styles.progressSection}>
                     <View style={styles.amountRow}>
                         <View>
-                            <Text style={styles.amountLabel}>Toplam</Text>
+                            <Text style={styles.amountLabel}>{t('payments.total')}</Text>
                             <Text style={styles.amountValue}>{formatCurrency(item.total_amount)}</Text>
                         </View>
                         <View style={styles.amountCenter}>
-                            <Text style={styles.amountLabel}>Ödenen</Text>
+                            <Text style={styles.amountLabel}>{t('payments.paid')}</Text>
                             <Text style={[styles.amountValue, { color: '#10B981' }]}>{formatCurrency(item.paid_amount)}</Text>
                         </View>
                         <View>
-                            <Text style={styles.amountLabel}>Kalan</Text>
+                            <Text style={styles.amountLabel}>{t('payments.remaining')}</Text>
                             <Text style={[styles.amountValue, { color: '#EF4444' }]}>{formatCurrency(item.remaining_amount)}</Text>
                         </View>
                     </View>
@@ -236,7 +277,7 @@ const PaymentsScreen = () => {
                         ) : installments.length > 0 ? (
                             installments.map(inst => renderInstallment(inst, item.id))
                         ) : (
-                            <Text style={styles.noInstallments}>Taksit bilgisi bulunamadı</Text>
+                            <Text style={styles.noInstallments}>{t('payments.noInstallments')}</Text>
                         )}
                     </View>
                 )}
@@ -264,18 +305,18 @@ const PaymentsScreen = () => {
                 }
                 ListHeaderComponent={
                     <View style={styles.header}>
-                        <Text style={styles.headerTitle}>Ödemelerim</Text>
+                        <Text style={styles.headerTitle}>{t('payments.title')}</Text>
                         <Text style={styles.subtitle}>
-                            Taksit planlarınızı görüntüleyin ve ödemelerinizi takip edin
+                            {t('payments.subtitle')}
                         </Text>
                     </View>
                 }
                 ListEmptyComponent={
                     <View style={styles.emptyContainer}>
                         <FontAwesome name="credit-card" size={60} color="#ccc" />
-                        <Text style={styles.emptyTitle}>Taksit Planı Yok</Text>
+                        <Text style={styles.emptyTitle}>{t('payments.noPlans')}</Text>
                         <Text style={styles.emptyText}>
-                            Henüz aktif bir taksit planınız bulunmuyor
+                            {t('payments.noPlansDesc')}
                         </Text>
                     </View>
                 }
