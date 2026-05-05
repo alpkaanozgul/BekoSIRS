@@ -1,11 +1,10 @@
 import axios from 'axios';
 import { getToken } from '../storage/storage.native';
 
-// Local IP address (update if network changes)
-const COMPUTER_IP = '172.20.10.6';
-
+// Development: Set EXPO_PUBLIC_API_URL in .env (e.g. http://192.168.1.5:8000/)
+// Each developer should configure their own local IP address.
 export const API_BASE_URL = __DEV__
-  ? process.env.EXPO_PUBLIC_API_URL || `http://${COMPUTER_IP}:8000/`
+  ? process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000/'
   : process.env.EXPO_PUBLIC_PROD_API_URL || 'https://api.bekosirs.com/';
 
 const api = axios.create({
