@@ -481,6 +481,41 @@ class Recommendation(models.Model):
 
 
 # -------------------------------
+# UserCategoryPreference (Cold-start onboarding)
+# -------------------------------
+class UserCategoryPreference(models.Model):
+    """
+    Categories explicitly chosen by the user during onboarding.
+
+    Cold start kullanicilarinin ilk seansta tamamen genel populer urunlerle
+    karsilasmamasi icin bir tohum sinyali olarak saklanir. Etkilesim sayisi
+    belirli bir esige ulastiginda recommender bu tercihleri yumusatarak gercek
+    davranis sinyaline yer acar.
+    """
+    customer = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name='category_preferences',
+        limit_choices_to={'role': 'customer'},
+    )
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.CASCADE,
+        related_name='preferred_by',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('customer', 'category')
+        ordering = ['-created_at']
+        verbose_name = 'User Category Preference'
+        verbose_name_plural = 'User Category Preferences'
+
+    def __str__(self):
+        return f"{self.customer.username} prefers {self.category.name}"
+
+
+# -------------------------------
 # 🔹 Password Reset Token Model
 # -------------------------------
 class PasswordResetToken(models.Model):
