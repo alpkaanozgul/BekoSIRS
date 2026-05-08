@@ -15,7 +15,12 @@ def reverse_normalize_assignment_statuses(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('products', '0029_product_created_at'),
+        # Bu data migration mantik olarak 0029'a bagliydi, ancak ayni numarada
+        # baska bir migration (0030_add_user_category_preference) main'e merge
+        # edildigi icin 0031'e tasindi ve dependency'si o leaf'e cekildi;
+        # boylece Django migration grafinde tek leaf node kalir, "multiple
+        # leaf nodes" hatasi alinmaz.
+        ('products', '0030_add_user_category_preference'),
     ]
 
     operations = [
