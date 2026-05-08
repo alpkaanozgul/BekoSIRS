@@ -9,7 +9,7 @@
 # 1.1. Etkileşim Puanları (İki farklı yerde hesaplanır):
 #   - Satın Alma (Purchase): 5.0 Puan (En güçlü sinyal)
 #   - Yorum (Review): Verilen yıldız puanı kadar (Modelde), Canlı puanda sadece >3 yıldız olanlar.
-#   - İstek Listesi (Wishlist): 3.0 Puan
+#   - İstek Listesi (Wishlist): 2.0 Puan
 #   - Görüntüleme (View):
 #       * NCF Eğitimi için: Görüntüleme sayısı kadar, maksimum 5 ile sınırlandırılır (Cap).
 #       * Canlı İçerik Puanı için: Görüntüleme sayısı kadar, maksimum 15 ile sınırlandırılır.
@@ -229,7 +229,7 @@ class NCFModel:
                 'source': 'view'
             })
 
-        # Wishlist (intent signal, weight=3.0)
+        # Wishlist (intent signal, weight=2.0)
         wishlist_items = WishlistItem.objects.filter(
             wishlist__customer__isnull=False
         ).values('wishlist__customer_id', 'product_id')
@@ -237,7 +237,7 @@ class NCFModel:
             interactions.append({
                 'user_id': w['wishlist__customer_id'],
                 'product_id': w['product_id'],
-                'score': 3.0,
+                'score': 2.0,
                 'source': 'wishlist'
             })
 
@@ -1159,29 +1159,23 @@ class HybridRecommender:
     def _get_adaptive_weights(self, user_interactions):
         """
         Kullanici etkilesim derinligine gore hibrit agirliklari secer.
-
-        Args:
-            user_interactions: {product_id: skor} biciminde pozitif etkilesim haritasi.
-
-        Returns:
-            (ncf, content, popularity) agirlik uclusu.
-
-        Bu esik yapisi secildi cunku soguk baslangicta populerlik daha guvenilir,
-        etkilesim biriktikce de NCF kisilestirme kalitesini daha iyi tasir.
         """
         interaction_count = self._count_meaningful_interactions(user_interactions)
 
-        # 0 etkilesim: isbirlikci filtreleme guvenilmezdir, bu yuzden populerlik %80'e cikar.
+        # 0 etkileşim (Yeni Kullanıcı)
         if interaction_count == 0:
-            return (0.0, 0.2, 0.8)
-        # 1-4 etkilesim: ilk tercihler gorunur, ama populerlik hala ana emniyet agidir.
+            return (0.0, 0.3, 0.7) 
+        
+        # 1-4 etkileşim (Az Tanıdık - İçerik ağırlığı ciddi artırıldı)
         if interaction_count < 5:
-            return (0.2, 0.3, 0.5)
-        # 5-19 etkilesim: icerik ve NCF birlikte calisir, dengeli faz budur.
+            return (0.1, 0.6, 0.3) 
+            
+        # 5-19 etkileşim (Dengeli - İçerik maksimum seviyede)
         if interaction_count < 20:
-            return (0.4, 0.3, 0.3)
-        # 20+ etkilesim: olgun profil, NCF %60 ile ana surucu haline gelir.
-        return (0.6, 0.3, 0.1)
+            return (0.2, 0.7, 0.1) 
+            
+        # 20+ etkileşim (Aktif Kullanıcı - İçerik halen baskın)
+        return (0.3, 0.6, 0.1)
 
     def _build_weight_details(self, user_interactions):
         """Tek kullanici icin API'ye hazir adaptif agirlik sozlugunu kurar."""

@@ -408,11 +408,13 @@ class RecommendationViewSet(viewsets.ModelViewSet):
                 id__in=exclude_ids
             ).order_by('-id')[:needed]
             for i, p in enumerate(fallback_products):
-                rec = Recommendation.objects.create(
+                rec, _ = Recommendation.objects.update_or_create(
                     customer=user,
                     product=p,
-                    score=0.1 - (i * 0.001),
-                    reason='Sizin İçin Seçtiklerimiz'
+                    defaults={
+                        'score': 0.1 - (i * 0.001),
+                        'reason': 'Sizin İçin Seçtiklerimiz'
+                    }
                 )
                 rec_list.append(rec)
             recommendations = rec_list
@@ -474,11 +476,13 @@ class RecommendationViewSet(viewsets.ModelViewSet):
         try:
             fallback_products = Product.objects.all().order_by('-id')[:10]
             for i, p in enumerate(fallback_products):
-                Recommendation.objects.create(
+                Recommendation.objects.update_or_create(
                     customer=user,
                     product_id=p.id,
-                    score=0.5 - (i * 0.01),
-                    reason='Popüler Ürünler'
+                    defaults={
+                        'score': 0.5 - (i * 0.01),
+                        'reason': 'Popüler Ürünler'
+                    }
                 )
         except Exception:
             pass
@@ -521,11 +525,13 @@ class RecommendationViewSet(viewsets.ModelViewSet):
 
                 Recommendation.objects.filter(customer=bg_user, dismissed=False).delete()
                 for rec in recs:
-                    Recommendation.objects.create(
+                    Recommendation.objects.update_or_create(
                         customer=bg_user,
                         product_id=rec['product_id'],
-                        score=rec.get('score', 0),
-                        reason=rec.get('reason', 'AI önerisi')
+                        defaults={
+                            'score': rec.get('score', 0),
+                            'reason': rec.get('reason', 'AI önerisi')
+                        }
                     )
                 import logging
                 logging.getLogger(__name__).info(
