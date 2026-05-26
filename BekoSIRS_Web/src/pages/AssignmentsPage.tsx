@@ -85,6 +85,9 @@ interface PreparedRoute {
 /* ============ Component ============ */
 export default function AssignmentsPage() {
     const { t } = useTranslation();
+    const showWeeklyPlanningConfig = false;
+    const showLegacyTabs = false;
+
     /* --- Main Tab --- */
     const [mainTab, setMainTab] = useState<'unscheduled' | 'planning'>('unscheduled');
 
@@ -708,7 +711,7 @@ export default function AssignmentsPage() {
                         </div>
 
                         {/* ===== WEEKLY PLANNING CONFIG ===== */}
-                        {false && (
+                        {showWeeklyPlanningConfig && (
                         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
                             <div className="flex flex-col xl:flex-row xl:items-end gap-5">
                                 <div className="flex-1">
@@ -996,7 +999,7 @@ export default function AssignmentsPage() {
                             )}
                         </div>
 
-                        {false && (
+                        {showLegacyTabs && (
                         <>
                         {/* ===== MAIN TABS ===== */}
                         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
