@@ -103,7 +103,7 @@ describe('WishlistScreen Tests', () => {
 
         await waitFor(() => {
             // Header info
-            expect(getByText('İstek Listem')).toBeTruthy();
+            expect(getByText('Favorilerim')).toBeTruthy();
             expect(getByText('2 ürün')).toBeTruthy();
 
             // First product (in stock)
@@ -143,8 +143,8 @@ describe('WishlistScreen Tests', () => {
         const { getByText } = render(<WishlistScreen />);
 
         await waitFor(() => {
-            expect(getByText('İstek Listeniz Boş')).toBeTruthy();
-            expect(getByText('Beğendiğiniz ürünleri buraya ekleyebilirsiniz')).toBeTruthy();
+            expect(getByText('Favorileriniz Boş')).toBeTruthy();
+            expect(getByText('Beğendiğiniz ürünleri favorilere ekleyebilirsiniz')).toBeTruthy();
         });
 
         // Test browse button

@@ -139,16 +139,16 @@ describe('RecommendationsScreen Tests', () => {
 
         // Because Robot Süpürge is already in wishlist, its button text should be different (wait for wishlist to load)
         await waitFor(() => {
-            expect(getByText('İstek Listesinde')).toBeTruthy(); // Robot Süpürge
-            expect(getAllByText('İstek Listesine Ekle').length).toBeGreaterThan(0); // TV
+            expect(getByText('Favorilerde')).toBeTruthy(); // Robot Süpürge
+            expect(getAllByText('Favorilere Ekle').length).toBeGreaterThan(0); // TV
         });
 
-        const addBtns = getAllByText('İstek Listesine Ekle');
+        const addBtns = getAllByText('Favorilere Ekle');
         fireEvent.press(addBtns[0]); // Press the first valid btn (Akıllı TV)
 
         await waitFor(() => {
             expect(wishlistAPI.addItem).toHaveBeenCalledWith(10);
-            expect(Alert.alert).toHaveBeenCalledWith('Başarılı', '"Akıllı TV 4K" istek listenize eklendi!');
+            expect(Alert.alert).toHaveBeenCalledWith('Başarılı', '"Akıllı TV 4K" favorilerinize eklendi!');
         });
     });
 

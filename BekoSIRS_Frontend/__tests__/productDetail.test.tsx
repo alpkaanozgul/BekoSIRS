@@ -103,12 +103,12 @@ describe('ProductDetailScreen Tests', () => {
         const productName = await findByText('Buzdolabı Pro');
         expect(productName).toBeTruthy();
 
-        const wishlistButton = await findByText('İstek Listesi');
+        const wishlistButton = await findByText('Favoriler');
         fireEvent.press(wishlistButton);
 
-        expect(await findByText('Listede')).toBeTruthy();
+        expect(await findByText('Favorilerde')).toBeTruthy();
         expect(wishlistAPI.addItem).toHaveBeenCalledWith(1);
-        expect(Alert.alert).toHaveBeenCalledWith('Başarılı', 'Ürün istek listesine eklendi');
+        expect(Alert.alert).toHaveBeenCalledWith('Başarılı', 'Ürün favorilerinize eklendi');
     });
 
     it('shows service request button only for owned products', async () => {
