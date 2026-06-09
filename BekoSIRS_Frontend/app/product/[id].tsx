@@ -16,7 +16,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { FontAwesome } from '@expo/vector-icons';
-import api, { wishlistAPI, viewHistoryAPI, reviewAPI, productOwnershipAPI, getImageUrl } from '../../services';
+import api, { wishlistAPI, viewHistoryAPI, reviewAPI, productOwnershipAPI, recommendationAPI, getImageUrl } from '../../services';
 import { useLanguage } from '../../context/LanguageContext';
 import { t } from '../../i18n';
 
@@ -53,6 +53,16 @@ interface Review {
   is_approved: boolean;
 }
 
+interface BundleProduct {
+  product_id: number;
+  name: string;
+  brand: string;
+  price: string;
+  image?: string | null;
+  category_name?: string | null;
+  co_purchase_count?: number | null;
+}
+
 const { width } = Dimensions.get('window');
 
 export default function ProductDetailScreen() {
@@ -75,6 +85,7 @@ export default function ProductDetailScreen() {
   const [averageRating, setAverageRating] = useState(0);
   const [similarProducts, setSimilarProducts] = useState<SimilarProduct[]>([]);
   const [similarLoading, setSimilarLoading] = useState(false);
+  const [bundleProducts, setBundleProducts] = useState<BundleProduct[]>([]);
   const [translatedComments, setTranslatedComments] = useState<Record<number, string>>({});
   const [translatingIds, setTranslatingIds] = useState<Set<number>>(new Set());
 
@@ -83,8 +94,20 @@ export default function ProductDetailScreen() {
       fetchProduct();
       fetchReviews();
       fetchSimilarProducts();
+      fetchBundleProducts();
       checkOwnership();
       recordView();
+    }
+  }, [id]);
+
+  // "Birlikte Alinanlar" — bu urunu alanlarin/inceleyenlerin tercih ettigi urunler.
+  // Backend once gercek satin-alma co-occurrence'a, yoksa Item-Item CF'e duser.
+  const fetchBundleProducts = useCallback(async () => {
+    try {
+      const response = await recommendationAPI.getBundleProducts(Number(id), 8);
+      setBundleProducts(response.data?.bundles || []);
+    } catch (error) {
+      setBundleProducts([]);
     }
   }, [id]);
 
@@ -474,6 +497,48 @@ export default function ProductDetailScreen() {
               </View>
             )}
           </View>
+
+          {/* Birlikte Alinanlar (Frequently Bought Together) — sadece sonuc varsa goster.
+              Amazon tarzi capraz satis; davranissal birliktelik sinyaliyle uretilir. */}
+          {bundleProducts.length > 0 && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>{t('product.frequentlyBought')}</Text>
+              <FlatList
+                data={bundleProducts}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                keyExtractor={(item) => item.product_id.toString()}
+                contentContainerStyle={{ gap: 12 }}
+                renderItem={({ item }) => {
+                  const imgSrc = item.image ? getImageUrl(item.image) : null;
+                  return (
+                    <TouchableOpacity
+                      style={styles.similarCard}
+                      activeOpacity={0.7}
+                      onPress={() => router.push(`/product/${item.product_id}`)}
+                    >
+                      <View style={styles.similarImageContainer}>
+                        {imgSrc ? (
+                          <Image source={{ uri: imgSrc }} style={styles.similarImage} resizeMode="cover" />
+                        ) : (
+                          <View style={[styles.similarImage, styles.similarImagePlaceholder]}>
+                            <FontAwesome name="image" size={28} color="#D1D5DB" />
+                          </View>
+                        )}
+                      </View>
+                      <View style={styles.similarInfo}>
+                        <Text style={styles.similarName} numberOfLines={2}>{item.name}</Text>
+                        <Text style={styles.similarBrand} numberOfLines={1}>{item.brand}</Text>
+                        <Text style={styles.similarPrice}>
+                          {parseFloat(item.price).toLocaleString('tr-TR', { style: 'currency', currency: 'TRY' })}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                }}
+              />
+            </View>
+          )}
 
           {/* Similar Products Section */}
           <View style={styles.section}>

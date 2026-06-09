@@ -241,7 +241,7 @@ export default {
   // Öneriler Sayfası
   recs: {
     title: '🤖 ML Önerileri',
-    subtitle: 'Neural Collaborative Filtering ile oluşturuldu',
+    subtitle: 'Yapay zeka ile sizin için seçildi',
     loading: 'ML modeli çalışıyor...',
     productsRecommended: 'ürün önerildi',
     pullToRefresh: 'Aşağı çekerek yenileyin',
@@ -281,6 +281,7 @@ export default {
     addReview: 'Değerlendir',
     noReviews: 'Henüz değerlendirme yok. İlk değerlendiren siz olun!',
     reviewCount: 'değerlendirme',
+    frequentlyBought: 'Birlikte Alınanlar',
     wishlist: 'Favoriler',
     inList: 'Favorilerde',
     serviceRequest: 'Servis Talebi',

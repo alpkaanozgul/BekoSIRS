@@ -14,7 +14,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from products.ml_recommender import HybridRecommender
-from products.models import Category, Product, ProductOwnership
+from products.models import Category, Product, ProductOwnership, ViewHistory
 
 User = get_user_model()
 
@@ -183,3 +183,60 @@ def test_bundle_endpoint_filters_already_owned(customer, products):
     bundle_pids = {item['product_id'] for item in response.json()['bundles']}
     assert comp_a.id not in bundle_pids
     assert comp_b.id in bundle_pids
+
+
+@pytest.mark.django_db
+def test_bundle_endpoint_includes_image_field(customer, products):
+    """Karusel icin her bundle ogesi 'image' alanini icermeli (None olabilir)."""
+    anchor, comp_a, _comp_b, _other = products
+
+    buyer = User.objects.create_user(username='image-buyer', password='X!', role='customer')
+    today = timezone.now().date()
+    ProductOwnership.objects.create(customer=buyer, product=anchor, purchase_date=today)
+    ProductOwnership.objects.create(customer=buyer, product=comp_a, purchase_date=today)
+
+    client = APIClient()
+    client.force_authenticate(user=customer)
+    response = client.get(f'/api/v1/recommendations/bundle/{anchor.id}/')
+
+    assert response.status_code == 200
+    bundles = response.json()['bundles']
+    assert bundles, 'bundle bos olmamali'
+    for item in bundles:
+        # Mobil karusel bu alanlara dayandigi icin hepsi mevcut olmali.
+        assert 'image' in item
+        assert 'name' in item
+        assert 'price' in item
+
+
+@pytest.mark.django_db
+def test_bundle_endpoint_falls_back_to_item_item_cf(customer, products):
+    """Satin-alma co-occurrence yoksa Item-Item CF ile karusel yine de dolmali."""
+    anchor, comp_a, _comp_b, _other = products
+
+    # Hic satin alma YOK; yalnizca goruntuleme ile davranissal birliktelik kur.
+    for i in range(3):
+        viewer = User.objects.create_user(username=f'viewer-{i}', password='X!', role='customer')
+        ViewHistory.objects.create(customer=viewer, product=anchor, view_count=3)
+        ViewHistory.objects.create(customer=viewer, product=comp_a, view_count=3)
+
+    from products.ml_recommender import get_recommender
+    recommender = get_recommender()
+    try:
+        # Goruntuleme verisinden item-item komsulugu egit; fallback bunu kullanir.
+        recommender.itemitem.train(verbose=False)
+
+        client = APIClient()
+        client.force_authenticate(user=customer)
+        response = client.get(f'/api/v1/recommendations/bundle/{anchor.id}/')
+
+        assert response.status_code == 200
+        bundle_pids = {item['product_id'] for item in response.json()['bundles']}
+        # comp_a, anchor ile birlikte goruntulendigi icin fallback'le gelmeli.
+        assert comp_a.id in bundle_pids
+    finally:
+        # Singleton durumunu geri al ki sonraki testler etkilenmesin.
+        recommender.itemitem.is_trained = False
+        recommender.itemitem.sim_matrix = None
+        recommender.itemitem.item_ids = None
+        recommender.itemitem.item_index = None

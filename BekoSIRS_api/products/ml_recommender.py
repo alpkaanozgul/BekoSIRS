@@ -93,7 +93,7 @@ from django.core.cache import cache
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.neural_network import MLPRegressor
+from sklearn.decomposition import TruncatedSVD
 from sklearn.preprocessing import LabelEncoder, MinMaxScaler
 from sklearn.model_selection import train_test_split
 
@@ -108,6 +108,9 @@ NCF_MODEL_PATH = os.path.join(ML_MODELS_DIR, 'ncf_model.pkl')
 CONTENT_MODEL_PATH = os.path.join(ML_MODELS_DIR, 'content_model.pkl')
 ENCODERS_PATH = os.path.join(ML_MODELS_DIR, 'encoders.pkl')
 METRICS_PATH = os.path.join(ML_MODELS_DIR, 'metrics.pkl')
+# Item-item CF (Amazon tarzi "bunu alanlar sunu da aldi") komsuluk matrisi.
+# Ayri bir dosyada tutulur cunku MF/content modellerinden bagimsiz egitilip yuklenir.
+ITEMITEM_MODEL_PATH = os.path.join(ML_MODELS_DIR, 'itemitem_model.pkl')
 
 
 # ---------------------------------------------------------------------------
@@ -187,495 +190,248 @@ def _load_model_from_db(file_path):
         return False
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 1. NEURAL COLLABORATIVE FILTERING MODEL
+# 1. MATRIX FACTORIZATION (COLLABORATIVE FILTERING) MODEL
 # ═══════════════════════════════════════════════════════════════════════════
-class NCFModel:
+class MatrixFactorizationModel:
     """
-    Neural Collaborative Filtering using scikit-learn MLPRegressor.
-    
-    Instead of a simple matrix factorization (SVD), this uses a neural network
-    that takes user_id and product_id as encoded features, concatenates them
-    with auxiliary features (price bucket, category), and predicts an
-    interaction score.
+    Matrix Factorization — Netflix Prize tarzi gercek collaborative filtering.
 
-    Architecture:
-      Input:  [user_encoded, product_encoded, category_encoded, price_bucket]
-      Hidden: 128 → 64 → 32 (ReLU activations)
-      Output: predicted interaction score
+    Kullanici x urun implicit-feedback matrisini (R) kurar ve TruncatedSVD ile
+    dusuk-rank latent faktorlere ayirir:
+
+        R ≈ user_factors @ item_factors.T
+        skor(u, i) = user_factors[u] . item_factors[i]
+
+    Onceki "NCF" (MLPRegressor) adina ragmen user/item embedding icermiyordu,
+    yani gercek CF yapamiyordu; ayrica fitted MLP pickle'i numpy surum degisiminde
+    bozuluyordu (loglardaki MT19937 hatasi). SVD ile elde edilen latent vektorler
+    hem gercek CF saglar hem de duz numpy dizisi olarak kaydedildigi icin yukleme
+    surum-bagimsiz ve dayaniklidir.
+
+    Sinif adi geriye donuk uyumluluk icin `NCFModel` alias'i ile de erisilebilir.
     """
+
+    # Latent faktor sayisi ust siniri. Kucuk/seyrek veride asiri ogrenmeyi onlemek
+    # icin kullanici ve urun sayisindan da kucuk olacak sekilde kirpilir.
+    MAX_COMPONENTS = 24
+
+    # Implicit etkilesim agirliklari (eski NCF ile ayni semantik): satin alma en guclu.
+    SIGNAL_WEIGHTS = {
+        'purchase': 5.0,
+        'wishlist': 3.0,
+        'view': 1.0,   # view_count ile olceklenir, VIEW_COUNT_CAP ile sinirli
+    }
+    VIEW_COUNT_CAP = 5
 
     def __init__(self):
-        self.model = None
-        self.user_encoder = LabelEncoder()
-        self.product_encoder = LabelEncoder()
-        self.category_encoder = LabelEncoder()
-        self.scaler = MinMaxScaler()
+        self.user_factors = None     # np.ndarray (n_users x k)
+        self.item_factors = None     # np.ndarray (n_items x k)
+        self.user_index = None       # dict {user_id: satir_idx}
+        self.item_ids = None         # list[int] — item_factors satir sirasi
+        self.item_index = None       # dict {product_id: satir_idx}
         self.is_trained = False
         self.training_metrics = {}
 
-    def _build_interaction_matrix(self):
-        """Collect all user-product interactions from the database."""
+    def _build_interaction_matrix(self, exclude_edges=None):
+        """
+        Tum (kullanici, urun) implicit etkilesimlerini {(uid, pid): skor} olarak toplar.
+
+        Ayni cift birden cok sinyal alabilir (ornegin hem goruntuleme hem satin alma);
+        skorlar toplanir, boylece guclu sinyaller matriste daha yuksek deger uretir.
+
+        `exclude_edges`: leave-one-out degerlendirmesinde sizinti olmasin diye
+        modelden gizlenecek (user_id, product_id) ciftleri. Verilirse o cift hicbir
+        sinyal tipinde matrise eklenmez (urun o kullanici icin "gorulmemis" sayilir).
+        """
         from .models import ViewHistory, WishlistItem, Review, ProductOwnership
 
-        interactions = []
+        exclude_edges = exclude_edges or set()
+        cells = {}
 
-        # Views (implicit signal, weight=1.0 per view, max 5)
-        views = ViewHistory.objects.all().values('customer_id', 'product_id', 'view_count')
-        for v in views:
-            interactions.append({
-                'user_id': v['customer_id'],
-                'product_id': v['product_id'],
-                'score': min(v['view_count'], 5) * 1.0,
-                'source': 'view'
-            })
+        def add(uid, pid, score):
+            if uid is None or pid is None:
+                return
+            if (uid, pid) in exclude_edges:
+                return
+            cells[(uid, pid)] = cells.get((uid, pid), 0.0) + score
 
-        # Wishlist (intent signal, weight=3.0)
-        wishlist_items = WishlistItem.objects.filter(
+        for v in ViewHistory.objects.values('customer_id', 'product_id', 'view_count'):
+            capped = min(v['view_count'] or 1, self.VIEW_COUNT_CAP)
+            add(v['customer_id'], v['product_id'], self.SIGNAL_WEIGHTS['view'] * capped)
+
+        for w in WishlistItem.objects.filter(
             wishlist__customer__isnull=False
-        ).values('wishlist__customer_id', 'product_id')
-        for w in wishlist_items:
-            interactions.append({
-                'user_id': w['wishlist__customer_id'],
-                'product_id': w['product_id'],
-                'score': 3.0,
-                'source': 'wishlist'
-            })
+        ).values('wishlist__customer_id', 'product_id'):
+            add(w['wishlist__customer_id'], w['product_id'], self.SIGNAL_WEIGHTS['wishlist'])
 
-        # Reviews (explicit signal, weight=rating)
-        reviews = Review.objects.all().values('customer_id', 'product_id', 'rating')
-        for r in reviews:
-            interactions.append({
-                'user_id': r['customer_id'],
-                'product_id': r['product_id'],
-                'score': float(r['rating']),
-                'source': 'review'
-            })
+        for r in Review.objects.values('customer_id', 'product_id', 'rating'):
+            add(r['customer_id'], r['product_id'], float(r['rating']))
 
-        # Purchases (strongest signal, weight=5.0)
-        purchases = ProductOwnership.objects.all().values('customer_id', 'product_id')
-        for p in purchases:
-            interactions.append({
-                'user_id': p['customer_id'],
-                'product_id': p['product_id'],
-                'score': 5.0,
-                'source': 'purchase'
-            })
+        for p in ProductOwnership.objects.values('customer_id', 'product_id'):
+            add(p['customer_id'], p['product_id'], self.SIGNAL_WEIGHTS['purchase'])
 
-        if not interactions:
-            return None
+        return cells
 
-        df = pd.DataFrame(interactions)
-        # Aggregate: sum scores per (user, product) pair
-        df = df.groupby(['user_id', 'product_id'])['score'].sum().reset_index()
-        return df
+    def train(self, epochs=None, verbose=True, exclude_edges=None):
+        """
+        Implicit matrisi TruncatedSVD ile faktorize eder.
 
-    def _prepare_features(self, interactions_df, products_df):
-        """Build a rich feature matrix with user stats, product stats, and cross features."""
-        from .models import ViewHistory, Review, ProductOwnership, WishlistItem
-
-        # ── User-level statistics ──
-        user_stats = {}
-        for uid in interactions_df['user_id'].unique():
-            user_interactions = interactions_df[interactions_df['user_id'] == uid]
-            user_stats[uid] = {
-                'avg_score': user_interactions['score'].mean(),
-                'n_interactions': len(user_interactions),
-                'score_std': user_interactions['score'].std() if len(user_interactions) > 1 else 0,
-                'n_unique_products': user_interactions['product_id'].nunique(),
-            }
-        user_stats_df = pd.DataFrame(user_stats).T
-        user_stats_df.index.name = 'user_id'
-        user_stats_df = user_stats_df.reset_index()
-
-        # ── Product-level statistics ──  
-        product_stats = {}
-        
-        # Calculate from raw data
-        all_reviews = list(Review.objects.values('product_id', 'rating'))
-        review_by_prod = {}
-        for r in all_reviews:
-            review_by_prod.setdefault(r['product_id'], []).append(r['rating'])
-        
-        all_views = dict(ViewHistory.objects.values_list('product_id', 'view_count'))
-        all_purchases = {}
-        for po in ProductOwnership.objects.values('product_id'):
-            all_purchases[po['product_id']] = all_purchases.get(po['product_id'], 0) + 1
-        
-        all_wishlist = {}
-        for wi in WishlistItem.objects.values('product__id'):
-            pid = wi['product__id']
-            all_wishlist[pid] = all_wishlist.get(pid, 0) + 1
-
-        for pid in interactions_df['product_id'].unique():
-            ratings = review_by_prod.get(pid, [])
-            product_stats[pid] = {
-                'prod_avg_rating': sum(ratings) / len(ratings) if ratings else 0,
-                'prod_n_reviews': len(ratings),
-                'prod_total_views': all_views.get(pid, 0),
-                'prod_n_purchases': all_purchases.get(pid, 0),
-                'prod_n_wishlist': all_wishlist.get(pid, 0),
-            }
-        product_stats_df = pd.DataFrame(product_stats).T
-        product_stats_df.index.name = 'product_id'
-        product_stats_df = product_stats_df.reset_index()
-
-        # ── Per-user per-product view count ──
-        user_product_views = {}
-        for vh in ViewHistory.objects.values('customer_id', 'product_id', 'view_count'):
-            key = (vh['customer_id'], vh['product_id'])
-            user_product_views[key] = vh['view_count']
-        
-        # Add user_view_count column to interactions_df
-        interactions_df['user_view_count'] = [
-            user_product_views.get((uid, pid), 0)
-            for uid, pid in zip(interactions_df['user_id'], interactions_df['product_id'])
-        ]
-
-        # ── Merge everything ──
-        merged = interactions_df.merge(
-            products_df[['id', 'category__name', 'price']],
-            left_on='product_id', right_on='id', how='left'
-        )
-        merged = merged.merge(user_stats_df, on='user_id', how='left')
-        merged = merged.merge(product_stats_df, on='product_id', how='left')
-
-        # ── Encode categoricals ──
-        merged['category__name'] = merged['category__name'].fillna('Unknown')
-        merged['category_enc'] = self.category_encoder.fit_transform(merged['category__name'])
-
-        # ── Price features ──
-        merged['price'] = pd.to_numeric(merged['price'], errors='coerce').fillna(0)
-        price_mean = merged['price'].mean() if merged['price'].mean() > 0 else 1
-        merged['price_normalized'] = merged['price'] / price_mean
-        merged['price_bucket'] = pd.cut(
-            merged['price'], bins=5, labels=[0, 1, 2, 3, 4], duplicates='drop'
-        ).astype(float).fillna(2)
-
-        # ── User-category affinity (how often this user interacts with this category) ──
-        user_cat_counts = merged.groupby(['user_id', 'category_enc']).size().reset_index(name='user_cat_count')
-        merged = merged.merge(user_cat_counts, on=['user_id', 'category_enc'], how='left')
-        merged['user_cat_affinity'] = merged['user_cat_count'] / merged['n_interactions'].clip(lower=1)
-
-        # ── Feature matrix (14 features) ──
-        feature_cols = [
-            'category_enc',
-            'price_normalized',
-            'price_bucket',
-            # User stats
-            'avg_score',
-            'n_interactions',
-            'score_std',
-            'n_unique_products',
-            # Product stats
-            'prod_avg_rating',
-            'prod_n_reviews',
-            'prod_total_views',
-            'prod_n_purchases',
-            'prod_n_wishlist',
-            # Cross features
-            'user_cat_affinity',
-            'user_view_count',
-        ]
-
-        # Fill NaN
-        for col in feature_cols:
-            merged[col] = merged[col].fillna(0)
-
-        X = merged[feature_cols].values.astype(float)
-        y = merged['score'].values.astype(float)
-
-        # Normalize features
-        X = self.scaler.fit_transform(X)
-
-        return X, y
-
-    def train(self, epochs=50, verbose=True):
-        """Train the NCF model on all available interaction data."""
-        from .models import Product
-
-        if verbose:
-            print("Loading interaction data...")
-
-        interactions_df = self._build_interaction_matrix()
-        if interactions_df is None or len(interactions_df) < 5:
-            msg = "Warning: not enough interaction data to train NCF (need at least 5 interactions)"
+        `epochs` parametresi yalnizca eski NCF imzasiyla uyumluluk icin durur ve
+        yok sayilir (SVD iteratif epoch kullanmaz). `exclude_edges` leave-one-out
+        degerlendirmesinde holdout kenarlarini gizlemek icin kullanilir.
+        """
+        cells = self._build_interaction_matrix(exclude_edges=exclude_edges)
+        if not cells or len(cells) < 5:
+            msg = "Not enough interaction data to train MF (need at least 5 interactions)"
             if verbose:
                 print(msg)
             logger.warning(msg)
             self.is_trained = False
             return False
 
-        # Load product metadata
-        products_df = pd.DataFrame(list(
-            Product.objects.all().values('id', 'category__name', 'price')
-        ))
+        user_ids = sorted({uid for uid, _ in cells})
+        item_ids = sorted({pid for _, pid in cells})
+        self.user_index = {uid: i for i, uid in enumerate(user_ids)}
+        self.item_index = {pid: i for i, pid in enumerate(item_ids)}
+        self.item_ids = item_ids
+
+        n_users, n_items = len(user_ids), len(item_ids)
 
         if verbose:
-            print(f"   Found {len(interactions_df)} user-product interactions")
-            print(f"   Unique users: {interactions_df['user_id'].nunique()}")
-            print(f"   Unique products: {interactions_df['product_id'].nunique()}")
+            print("Loading interaction data...")
+            print(f"   Found {len(cells)} user-product interactions")
+            print(f"   Unique users: {n_users}, unique products: {n_items}")
 
-        # Prepare features
-        X, y = self._prepare_features(interactions_df, products_df)
+        # Yogun matris kucuk katalogda sorun degil (263 x 32 ≈ 8K hucre).
+        R = np.zeros((n_users, n_items), dtype=float)
+        for (uid, pid), score in cells.items():
+            R[self.user_index[uid], self.item_index[pid]] = score
 
-        # Train/test split for evaluation
-        if len(X) > 10:
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=0.2, random_state=42
-            )
-        else:
-            X_train, y_train = X, y
-            X_test, y_test = X, y
+        # Latent boyut, SVD'nin gerektirdigi gibi min(n_users, n_items)'tan kucuk olmali.
+        # Ayrica kasitli olarak tam-rank'in iyice altinda tutulur: aksi halde kucuk
+        # kullanici matrisinde SVD veriyi EZBERLER (generalize etmez) ve hem oneriler
+        # zayiflar hem de offline siralama metrikleri yaniltici sekilde mukemmel cikar.
+        # min(n_users, n_items)//2 tavani bu ezberlemeyi engelleyip gercek latent yapiyi
+        # ogrenmeye zorlar.
+        rank_cap = max(2, min(n_users, n_items) // 2)
+        k = max(2, min(self.MAX_COMPONENTS, rank_cap, n_users - 1, n_items - 1))
 
-        if verbose:
-            print("\nTraining Neural Collaborative Filtering model...")
-            print(f"   Architecture: Input({X.shape[1]}) -> 128 -> 64 -> 32 -> 16 -> 1")
-            print(f"   Training samples: {len(X_train)}, Test samples: {len(X_test)}")
+        svd = TruncatedSVD(n_components=k, random_state=42)
+        # user_factors: her kullanicinin latent zevk vektoru.
+        self.user_factors = svd.fit_transform(R)
+        # item_factors: her urunun latent ozellik vektoru (components_ transpoze).
+        self.item_factors = svd.components_.T
 
-        # Build and train MLP — tuned for small-to-large datasets
-        self.model = MLPRegressor(
-            hidden_layer_sizes=(128, 64, 32, 16),
-            activation='relu',
-            solver='adam',
-            learning_rate='adaptive',
-            learning_rate_init=0.0003,
-            max_iter=epochs,
-            batch_size=min(64, len(X_train)),
-            early_stopping=True if len(X_train) > 20 else False,
-            validation_fraction=0.15 if len(X_train) > 20 else 0.0,
-            n_iter_no_change=50,
-            tol=1e-6,
-            random_state=42,
-            verbose=False
-        )
-
-        self.model.fit(X_train, y_train)
-
-        # Evaluate
-        train_score = self.model.score(X_train, y_train)
-        test_score = self.model.score(X_test, y_test)
-
-        # Calculate Hit Rate @ K
-        if len(X_test) > 0:
-            predictions = self.model.predict(X_test)
-            hit_rate = self._calculate_hit_rate(y_test, predictions, k=10)
-        else:
-            hit_rate = 0.0
+        # Aciklanan varyans, dusuk-rank latent uzayin matrisi ne kadar tasidigini ozetler.
+        explained_variance = float(svd.explained_variance_ratio_.sum())
 
         self.training_metrics = {
-            'train_r2': round(train_score, 4),
-            'test_r2': round(test_score, 4),
-            'hit_rate_at_10': round(hit_rate, 4),
-            'n_interactions': len(interactions_df),
-            'n_users': interactions_df['user_id'].nunique(),
-            'n_products': interactions_df['product_id'].nunique(),
-            'n_epochs': self.model.n_iter_,
-            'final_loss': round(self.model.loss_, 6) if hasattr(self.model, 'loss_') else None,
+            'algorithm': 'TruncatedSVD',
+            'n_components': k,
+            'explained_variance': round(explained_variance, 4),
+            'n_interactions': len(cells),
+            'n_users': n_users,
+            'n_products': n_items,
             'trained_at': time.strftime('%Y-%m-%d %H:%M:%S'),
         }
+        self.is_trained = True
 
         if verbose:
-            print("\nTraining Results:")
-            print(f"   Epochs completed: {self.model.n_iter_}")
-            print(f"   Final loss:       {self.training_metrics['final_loss']}")
-            print(f"   Train R² score:   {train_score:.4f}")
-            print(f"   Test R² score:    {test_score:.4f}")
-            print(f"   Hit Rate @10:     {hit_rate:.4f}")
+            print("\nMatrix Factorization (TruncatedSVD) trained:")
+            print(f"   Matrix: {n_users} users x {n_items} products")
+            print(f"   Latent factors (k): {k}")
+            print(f"   Explained variance: {explained_variance:.4f}")
 
-        self.is_trained = True
         return True
 
-    def _calculate_hit_rate(self, y_true, y_pred, k=10):
-        """Calculate Hit Rate @ K — how often the top-K includes relevant items."""
-        if len(y_true) == 0:
-            return 0.0
-        # Consider items with true score > median as "relevant"
-        threshold = np.median(y_true)
-        relevant = y_true > threshold
-        # Check if top-K predicted items include relevant items
-        top_k_indices = np.argsort(y_pred)[-k:]
-        hits = np.sum(relevant[top_k_indices])
-        total_relevant = np.sum(relevant)
-        if total_relevant == 0:
-            return 0.0
-        return hits / min(total_relevant, k)
+    def predict_for_user(self, user_id, all_product_ids, products_df=None):
+        """
+        Kullanici icin tum urunlere latent dot-product skoru hesaplar.
 
-    def predict_for_user(self, user_id, all_product_ids, products_df):
-        """Predict interaction scores for a user across all products."""
-        if not self.is_trained or self.model is None:
-            return {}
-        
-        from .models import ViewHistory, Review, ProductOwnership, WishlistItem
-
-        # ── Precompute user-level stats from DB ──
-        user_reviews = list(Review.objects.filter(customer_id=user_id).values('product_id', 'rating'))
-        user_views = dict(ViewHistory.objects.filter(customer_id=user_id).values_list('product_id', 'view_count'))
-        user_purchases = set(ProductOwnership.objects.filter(customer_id=user_id).values_list('product_id', flat=True))
-        
-        # User-level stats (same as training)
-        all_user_scores = []
-        for r in user_reviews:
-            all_user_scores.append(float(r['rating']))
-        for _ in user_views:
-            all_user_scores.append(1.0)  # view implicit score
-        for _ in user_purchases:
-            all_user_scores.append(5.0)  # purchase score
-        
-        if all_user_scores:
-            user_avg_score = sum(all_user_scores) / len(all_user_scores)
-            user_n_interactions = len(all_user_scores)
-            user_score_std = (sum((s - user_avg_score) ** 2 for s in all_user_scores) / len(all_user_scores)) ** 0.5 if len(all_user_scores) > 1 else 0
-            user_n_unique = len(set(list(user_views.keys()) + [r['product_id'] for r in user_reviews] + list(user_purchases)))
-        else:
-            user_avg_score = 0
-            user_n_interactions = 0
-            user_score_std = 0
-            user_n_unique = 0
-
-        # Build a dict lookup for product data to avoid repeated DataFrame filtering
-        product_lookup = {}
-        for _, row in products_df.iterrows():
-            product_lookup[row['id']] = {
-                'category__name': row['category__name'] or 'Unknown',
-                'price': float(row['price'] or 0),
-            }
-
-        # User category interaction counts — uses dict lookup instead of DataFrame filter
-        user_cat_counts = {}
-        for pid in list(user_views.keys()) + [r['product_id'] for r in user_reviews]:
-            prod_data = product_lookup.get(pid)
-            if prod_data:
-                cat = prod_data['category__name']
-                user_cat_counts[cat] = user_cat_counts.get(cat, 0) + 1
-
-        # ── Precompute product-level stats ──
-        all_prod_reviews = list(Review.objects.values('product_id', 'rating'))
-        review_by_prod = {}
-        for r in all_prod_reviews:
-            review_by_prod.setdefault(r['product_id'], []).append(r['rating'])
-        
-        all_prod_views = dict(ViewHistory.objects.values_list('product_id', 'view_count'))
-        
-        purchase_counts = {}
-        for po in ProductOwnership.objects.values('product_id'):
-            purchase_counts[po['product_id']] = purchase_counts.get(po['product_id'], 0) + 1
-        
-        wishlist_counts = {}
-        for wi in WishlistItem.objects.values('product__id'):
-            wishlist_counts[wi['product__id']] = wishlist_counts.get(wi['product__id'], 0) + 1
-
-        # ── Price normalization (use same mean as would be computed from all products) ──
-        all_prices = [p['price'] for p in product_lookup.values()]
-        price_mean = sum(all_prices) / len(all_prices) if all_prices else 1
-        if price_mean == 0:
-            price_mean = 1
-        max_price = max(all_prices) if all_prices else 1
-
-        # ── Pre-encode all known categories for batch lookup ──
-        cat_enc_map = {cls: idx for idx, cls in enumerate(self.category_encoder.classes_)}
-
-        # ── Build feature matrix for ALL products at once (vectorized prediction) ──
-        valid_pids = []
-        feature_rows = []
-        for pid in all_product_ids:
-            prod_data = product_lookup.get(pid)
-            if prod_data is None:
-                continue
-
-            cat_name = prod_data['category__name']
-            price = prod_data['price']
-
-            cat_enc = cat_enc_map.get(cat_name, 0)
-            price_normalized = price / price_mean
-            price_bucket = min(int(price / max(1, max_price / 5)), 4) if all_prices else 2
-
-            p_ratings = review_by_prod.get(pid, [])
-            prod_avg_rating = sum(p_ratings) / len(p_ratings) if p_ratings else 0
-            prod_n_reviews = len(p_ratings)
-            prod_total_views = all_prod_views.get(pid, 0)
-            prod_n_purchases = purchase_counts.get(pid, 0)
-            prod_n_wishlist = wishlist_counts.get(pid, 0)
-
-            user_cat_affinity = user_cat_counts.get(cat_name, 0) / max(user_n_interactions, 1)
-            user_view_count = user_views.get(pid, 0)
-
-            feature_rows.append([
-                cat_enc,
-                price_normalized,
-                price_bucket,
-                user_avg_score,
-                user_n_interactions,
-                user_score_std,
-                user_n_unique,
-                prod_avg_rating,
-                prod_n_reviews,
-                prod_total_views,
-                prod_n_purchases,
-                prod_n_wishlist,
-                user_cat_affinity,
-                user_view_count,
-            ])
-            valid_pids.append(pid)
-
-        if not feature_rows:
+        `products_df` parametresi eski NCF imzasiyla uyumluluk icin durur; SVD
+        skorlamasi yalnizca latent faktorleri kullandigindan kullanilmaz.
+        Egitimde gorulmemis kullanici (cold-start) icin bos sozluk doner; bu durumda
+        hibrit motor populerlik/content kulesine yaslanir.
+        """
+        if not self.is_trained or self.user_factors is None:
             return {}
 
-        # Single batch predict instead of per-product predict
-        X = self.scaler.transform(np.array(feature_rows, dtype=float))
-        predictions = self.model.predict(X)
+        u_idx = self.user_index.get(user_id)
+        if u_idx is None:
+            return {}
 
+        # (n_items x k) @ (k,) → (n_items,) tek vektorize carpim.
+        raw = self.item_factors @ self.user_factors[u_idx]
+
+        requested = set(all_product_ids) if all_product_ids is not None else None
         scores = {}
-        for pid, pred in zip(valid_pids, predictions):
-            scores[pid] = max(pred, 0)
-
+        for j, pid in enumerate(self.item_ids):
+            if requested is not None and pid not in requested:
+                continue
+            value = float(raw[j])
+            # Negatif latent skorlar zayif/ilgisiz sinyaldir; yalnizca pozitifleri tutariz.
+            if value > 0:
+                scores[pid] = value
         return scores
 
     def save(self, path=None):
-        """Save trained model to disk and to the shared database."""
+        """Latent faktorleri diske ve paylasimli veritabanina kaydeder (duz numpy → guvenli)."""
         os.makedirs(ML_MODELS_DIR, exist_ok=True)
-        joblib.dump(self.model, path or NCF_MODEL_PATH)
+        save_path = path or NCF_MODEL_PATH
         joblib.dump({
-            'user_encoder': self.user_encoder,
-            'product_encoder': self.product_encoder,
-            'category_encoder': self.category_encoder,
-            'scaler': self.scaler,
+            'user_factors': self.user_factors,
+            'item_factors': self.item_factors,
+            'user_index': self.user_index,
+            'item_index': self.item_index,
+            'item_ids': self.item_ids,
             'metrics': self.training_metrics,
-        }, ENCODERS_PATH)
+        }, save_path)
         joblib.dump(self.training_metrics, METRICS_PATH)
-        logger.info("NCF model saved to %s", ML_MODELS_DIR)
+        logger.info("MF model saved to %s", ML_MODELS_DIR)
 
-        # Sync to shared database
-        for file_path in [path or NCF_MODEL_PATH, ENCODERS_PATH, METRICS_PATH]:
+        for file_path in [save_path, METRICS_PATH]:
             _save_model_to_db(file_path)
 
     def load(self, path=None):
-        """Load trained model from disk, falling back to database if local files are missing."""
+        """
+        Diskten (yoksa veritabanindan) yukler.
+
+        Yalnizca duz numpy dizileri saklandigi icin yukleme surum-bagimsizdir; eski
+        MLPRegressor pickle'i veya bozuk dosya gelirse istisna yakalanir ve False
+        donulur, boylece motor yeniden egitime gecer.
+        """
         model_path = path or NCF_MODEL_PATH
 
-        # If local files are missing, try downloading from database
-        if not os.path.exists(model_path) or not os.path.exists(ENCODERS_PATH):
-            logger.info("Local NCF model files missing, trying database...")
-            for file_path in [model_path, ENCODERS_PATH, METRICS_PATH]:
-                _load_model_from_db(file_path)
+        if not os.path.exists(model_path):
+            logger.info("Local MF model file missing, trying database...")
+            _load_model_from_db(model_path)
+            _load_model_from_db(METRICS_PATH)
 
-        # Now try loading from local files
-        if not os.path.exists(model_path) or not os.path.exists(ENCODERS_PATH):
+        if not os.path.exists(model_path):
             return False
 
         try:
-            self.model = joblib.load(model_path)
-            encoders = joblib.load(ENCODERS_PATH)
-            self.user_encoder = encoders['user_encoder']
-            self.product_encoder = encoders['product_encoder']
-            self.category_encoder = encoders['category_encoder']
-            self.scaler = encoders['scaler']
-            self.training_metrics = encoders.get('metrics', {})
-            self.is_trained = True
-            logger.info("NCF model loaded from %s", model_path)
-            return True
+            data = joblib.load(model_path)
+            self.user_factors = data['user_factors']
+            self.item_factors = data['item_factors']
+            self.user_index = data['user_index']
+            self.item_index = data['item_index']
+            self.item_ids = data['item_ids']
+            self.training_metrics = data.get('metrics', {})
+            self.is_trained = (
+                self.user_factors is not None and self.item_factors is not None
+            )
+            if self.is_trained:
+                logger.info("MF model loaded from %s", model_path)
+            return self.is_trained
         except Exception as e:
-            logger.error("Failed to load NCF model: %s", e)
+            logger.error("Failed to load MF model: %s", e)
             return False
+
+
+# Geriye donuk uyumluluk: eski isimle import eden kodlar (testler, management komutlari)
+# kirilmasin diye NCFModel artik MatrixFactorizationModel'e isaret eder.
+NCFModel = MatrixFactorizationModel
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -851,6 +607,221 @@ class ContentBasedModel:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 2.5. ITEM-TO-ITEM COLLABORATIVE FILTERING (Amazon tarzi)
+# ═══════════════════════════════════════════════════════════════════════════
+class ItemItemCFModel:
+    """
+    Item-to-item collaborative filtering — Amazon'un "bunu alan sunu da aldi"
+    algoritmasi.
+
+    Her kullanicinin etkilesime girdigi urun "sepetini" (view + wishlist + review
+    + purchase) toplar ve urun-urun benzerligini, kullanici-agirlik kolonlari
+    uzerinden kosinus benzerligi ile hesaplar:
+
+        sim(i, j) = (M[:,i] . M[:,j]) / (||M[:,i]|| * ||M[:,j]||)
+
+    Bu yaklasim secildi cunku seyrek kataloglarda iyi calisir: her urun-cifti icin
+    kaniti tum kullanicilar uzerinden toplar, tek bir kullaniciya bagli kalmaz.
+    Content kulesinin (anlamsal benzerlik) yaninda davranissal sinyali getirir.
+    """
+
+    # Implicit sepet agirliklari: satin alma, bir urune bakmaktan cok daha guclu
+    # bir birliktelik sinyalidir. View, view_count ile olcekli ama 5 ile sinirli.
+    BASKET_WEIGHTS = {
+        'purchase': 5.0,
+        'wishlist': 3.0,
+        'review': 2.0,
+        'view': 1.0,
+    }
+    VIEW_COUNT_CAP = 5
+
+    def __init__(self):
+        self.sim_matrix = None      # np.ndarray (n_items x n_items), kosinus normalize
+        self.item_ids = None        # list[int] — satir/sutun sirasi
+        self.item_index = None      # dict {product_id: satir_idx}
+        self.is_trained = False
+
+    def _build_baskets(self, exclude_edges=None):
+        """
+        Her kullanicinin agirlikli urun sepetini tum implicit sinyallerden toplar.
+
+        `exclude_edges`: leave-one-out degerlendirmesinde gizlenecek (user_id,
+        product_id) ciftleri; verilirse o cift hicbir kullanicinin sepetine eklenmez.
+        """
+        from .models import ViewHistory, WishlistItem, Review, ProductOwnership
+
+        exclude_edges = exclude_edges or set()
+        baskets = {}  # {user_id: {product_id: agirlik}}
+
+        def add(uid, pid, weight):
+            if uid is None or pid is None:
+                return
+            if (uid, pid) in exclude_edges:
+                return
+            basket = baskets.setdefault(uid, {})
+            basket[pid] = basket.get(pid, 0.0) + weight
+
+        for v in ViewHistory.objects.values('customer_id', 'product_id', 'view_count'):
+            capped = min(v['view_count'] or 1, self.VIEW_COUNT_CAP)
+            add(v['customer_id'], v['product_id'], self.BASKET_WEIGHTS['view'] * capped)
+
+        for w in WishlistItem.objects.filter(
+            wishlist__customer__isnull=False
+        ).values('wishlist__customer_id', 'product_id'):
+            add(w['wishlist__customer_id'], w['product_id'], self.BASKET_WEIGHTS['wishlist'])
+
+        for r in Review.objects.values('customer_id', 'product_id'):
+            add(r['customer_id'], r['product_id'], self.BASKET_WEIGHTS['review'])
+
+        for p in ProductOwnership.objects.values('customer_id', 'product_id'):
+            add(p['customer_id'], p['product_id'], self.BASKET_WEIGHTS['purchase'])
+
+        return baskets
+
+    def train(self, verbose=True, exclude_edges=None):
+        """
+        Kullanici sepetlerinden urun-urun kosinus benzerlik matrisini kurar.
+
+        `exclude_edges` leave-one-out degerlendirmesinde holdout kenarlarini gizler.
+        """
+        baskets = self._build_baskets(exclude_edges=exclude_edges)
+        if not baskets:
+            self.is_trained = False
+            return False
+
+        # Herhangi bir sepette gecen tum urunler evreni olusturur.
+        item_set = set()
+        for basket in baskets.values():
+            item_set.update(basket.keys())
+
+        self.item_ids = sorted(item_set)
+        self.item_index = {pid: i for i, pid in enumerate(self.item_ids)}
+
+        n_items = len(self.item_ids)
+        user_ids = sorted(baskets.keys())
+        n_users = len(user_ids)
+
+        if n_items < 2:
+            self.is_trained = False
+            return False
+
+        # Kullanici x urun agirlik matrisi; sutunlar arasi kosinus = item-item benzerlik.
+        M = np.zeros((n_users, n_items), dtype=float)
+        for u_idx, uid in enumerate(user_ids):
+            for pid, weight in baskets[uid].items():
+                M[u_idx, self.item_index[pid]] = weight
+
+        self.sim_matrix = cosine_similarity(M.T)
+        # Bir urun kendi komsusu degildir; kosegeni sifirla.
+        np.fill_diagonal(self.sim_matrix, 0.0)
+        self.is_trained = True
+
+        if verbose:
+            print(f"   Item-Item CF: {n_items} urun x {n_users} kullanici sepeti")
+
+        return True
+
+    def get_cooccurring(self, product_id, top_n=8, exclude_ids=None):
+        """
+        Verilen urunle davranissal olarak en cok birlikte gorulen urunleri dondurur.
+
+        "Birlikte alinanlar" karuseli ve ana akistaki item-item bloku icin ortak
+        giris noktasidir. [(product_id, benzerlik), ...] dondurur.
+        """
+        if not self.is_trained or product_id not in self.item_index:
+            return []
+
+        exclude = set(exclude_ids or [])
+        exclude.add(product_id)
+
+        idx = self.item_index[product_id]
+        sims = self.sim_matrix[idx]
+        order = np.argsort(sims)[::-1]
+
+        out = []
+        for j in order:
+            sim = float(sims[j])
+            if sim <= 0:
+                break  # argsort azalan; ilk sifir/negatiften sonrasi da gereksiz.
+            pid = self.item_ids[j]
+            if pid in exclude:
+                continue
+            out.append((pid, sim))
+            if len(out) >= top_n:
+                break
+        return out
+
+    def get_user_itemcf_scores(self, user_interactions, exclude_ids=None):
+        """
+        Kullanicinin tum etkilesimlerinden item-item benzerligi toplayarak aday
+        urun skorlari uretir.
+
+            score(aday) = toplam_{tohum s} sim(s, aday) * agirlik_s
+
+        Vektorize edildi: her tohum icin benzerlik satiri agirlikla carpilip
+        bir akumulatorde toplanir; boylece N urun icin tek gecis yeter.
+        """
+        if not self.is_trained or not user_interactions:
+            return {}
+
+        exclude = set(exclude_ids or [])
+        acc = np.zeros(len(self.item_ids), dtype=float)
+
+        for seed_pid, weight in user_interactions.items():
+            s_idx = self.item_index.get(seed_pid)
+            if s_idx is None or weight <= 0:
+                continue
+            acc += self.sim_matrix[s_idx] * weight
+
+        scores = {}
+        for j, value in enumerate(acc):
+            if value <= 0:
+                continue
+            pid = self.item_ids[j]
+            if pid in exclude:
+                continue
+            scores[pid] = float(value)
+        return scores
+
+    def save(self, path=None):
+        """Modeli diske ve paylasimli veritabanina kaydeder (duz numpy → guvenli pickle)."""
+        os.makedirs(ML_MODELS_DIR, exist_ok=True)
+        save_path = path or ITEMITEM_MODEL_PATH
+        joblib.dump({
+            'sim_matrix': self.sim_matrix,
+            'item_ids': self.item_ids,
+            'item_index': self.item_index,
+        }, save_path)
+        _save_model_to_db(save_path)
+
+    def load(self, path=None):
+        """Diskten (yoksa veritabanindan) yukler. Duz dizi oldugu icin surum-bagimsiz."""
+        model_path = path or ITEMITEM_MODEL_PATH
+
+        if not os.path.exists(model_path):
+            logger.info("Local item-item model missing, trying database...")
+            _load_model_from_db(model_path)
+
+        if not os.path.exists(model_path):
+            return False
+
+        try:
+            data = joblib.load(model_path)
+            self.sim_matrix = data['sim_matrix']
+            self.item_ids = data['item_ids']
+            self.item_index = data['item_index']
+            self.is_trained = (
+                self.sim_matrix is not None
+                and self.item_ids is not None
+                and len(self.item_ids) > 1
+            )
+            return self.is_trained
+        except Exception as e:
+            logger.error("Failed to load item-item model: %s", e)
+            return False
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # 3. HYBRID RECOMMENDER (Main Entry Point)
 # ═══════════════════════════════════════════════════════════════════════════
 class HybridRecommender:
@@ -871,10 +842,15 @@ class HybridRecommender:
     _instance = None
     _lock = threading.Lock()
 
-    # Hybrid weights
-    WEIGHT_NCF = 0.5
-    WEIGHT_CONTENT = 0.3
-    WEIGHT_POPULARITY = 0.2
+    # Hibrit kule agirliklari (varsayilan/bilgilendirme amacli — gercek agirliklar
+    # _get_adaptive_weights ile kullanici seviyesine gore secilir). Dort kule:
+    # Matrix Factorization (Netflix), Item-Item CF (Amazon), Content (Spotify), Popularity.
+    WEIGHT_MF = 0.30
+    WEIGHT_ITEM_ITEM = 0.30
+    WEIGHT_CONTENT = 0.25
+    WEIGHT_POPULARITY = 0.15
+    # Geriye donuk uyumluluk: eski kod/test WEIGHT_NCF okuyabilir.
+    WEIGHT_NCF = WEIGHT_MF
 
     # Yari omur degerleri etkilesim amacina gore ayarlanmistir:
     # Satin alma sinyali uzun sure gecerliligini korur, goruntulemeler daha hizli eskir.
@@ -921,7 +897,13 @@ class HybridRecommender:
 
     def _init_models(self):
         """Initialize sub-models, try to load, and auto-train in background if needed."""
+        # Matrix Factorization kulesi. `self.ncf` adi geriye donuk uyumluluk icin
+        # korunur (eski testler/komutlar bu attribute'u kullanir); `self.mf` ayni
+        # nesneye okunabilir bir takma addir.
         self.ncf = NCFModel()
+        self.mf = self.ncf
+        # Item-Item CF kulesi (Amazon tarzi davranissal komsuluk).
+        self.itemitem = ItemItemCFModel()
         self.content = ContentBasedModel()
         self._loaded = False
         self._training = False
@@ -929,8 +911,9 @@ class HybridRecommender:
 
         # Try loading persisted models (checks local disk, then DB)
         ncf_loaded = self.ncf.load()
+        itemitem_loaded = self.itemitem.load()
         content_loaded = self.content.load()
-        self._loaded = ncf_loaded or content_loaded
+        self._loaded = ncf_loaded or itemitem_loaded or content_loaded
 
         if self._loaded:
             logger.info("Recommender loaded saved models from disk")
@@ -1004,27 +987,44 @@ class HybridRecommender:
         # 1. Train content model (always works if products exist)
         content_ok = self.content.train(verbose=verbose)
 
-        # 2. Train NCF model (needs interaction data)
-        ncf_ok = self.ncf.train(epochs=epochs, verbose=verbose)
+        # 2. Train Matrix Factorization model (needs interaction data)
+        mf_ok = self.ncf.train(epochs=epochs, verbose=verbose)
 
-        # 3. Save models
+        # 3. Train Item-Item CF model (needs interaction data)
+        itemitem_ok = self.itemitem.train(verbose=verbose)
+
+        # 4. Siralama degerlendirmesi (R² yerine Recall@K/NDCG/MAP).
+        #    Modeller egitildikten sonra holdout ile gercek oneri kalitesini olcer.
+        if mf_ok or itemitem_ok or content_ok:
+            try:
+                ranking_metrics = self.evaluate_ranking(k=10)
+                # MF metrik sozlugune sirali metrikleri ekle ki frontend/komutlar
+                # tek yerden okuyabilsin.
+                self.ncf.training_metrics.update(ranking_metrics)
+            except Exception as e:
+                logger.warning("Ranking evaluation failed: %s", e)
+
+        # 5. Save models
         if content_ok:
             self.content.save()
-        if ncf_ok:
+        if mf_ok:
             self.ncf.save()
+        if itemitem_ok:
+            self.itemitem.save()
 
         elapsed = time.time() - start_time
 
         if verbose:
             print(f"\n{'=' * 60}")
             print(f"Training complete in {elapsed:.1f}s")
-            print(f"   NCF model:     {'trained' if ncf_ok else 'skipped (not enough data)'}")
-            print(f"   Content model: {'trained' if content_ok else 'skipped (no products)'}")
-            print(f"   Models saved:  {ML_MODELS_DIR}")
+            print(f"   Matrix Factorization: {'trained' if mf_ok else 'skipped (not enough data)'}")
+            print(f"   Item-Item CF:         {'trained' if itemitem_ok else 'skipped (not enough data)'}")
+            print(f"   Content model:        {'trained' if content_ok else 'skipped (no products)'}")
+            print(f"   Models saved:         {ML_MODELS_DIR}")
             print(f"{'=' * 60}")
 
-        self._loaded = content_ok or ncf_ok
-        return content_ok or ncf_ok
+        self._loaded = content_ok or mf_ok or itemitem_ok
+        return content_ok or mf_ok or itemitem_ok
 
     def recommend(self, user, top_n=10, ignore_cache=False, exclude_ids=None):
         """
@@ -1071,26 +1071,46 @@ class HybridRecommender:
 
         final_scores = {}
         reasons = {}  # (kaynak_tipi, ek_bilgi) ikililerini saklar.
+        # Her urun icin kule bazli katkilar; gerekce, blok sirasina gore degil EN COK
+        # katki yapan kuleye gore atanir (asagida argmax ile). Boylece aktif kullanicida
+        # her urun ayni "MF" etiketini almak yerine gercek baskin sinyali yansitir.
+        contributions = {}
 
         all_product_ids = self.content.products_df['id'].tolist()
 
-        # 1. NCF skorlari
-        # NCF skorlari yeterli etkilesimi olan kullanicida ana kisilestirme sinyalidir.
+        # 1. Matrix Factorization (Netflix tarzi latent CF) skorlari
+        # Yeterli etkilesimi olan kullanicida ana kisilestirme sinyali budur:
+        # latent zevk vektoru, kullanicinin acikca gormedigi urunleri de tahmin eder.
         if self.ncf.is_trained:
-            ncf_scores = self.ncf.predict_for_user(
+            mf_scores = self.ncf.predict_for_user(
                 user.id, all_product_ids, self.content.products_df
             )
-            if ncf_scores:
-                max_ncf = max(ncf_scores.values()) or 1
-                for pid, score in ncf_scores.items():
+            if mf_scores:
+                max_mf = max(mf_scores.values()) or 1
+                for pid, score in mf_scores.items():
                     if pid not in exclude_ids:
-                        # Normalize edilen katki = (aday_skoru / en_yuksek_skor) * ncf_agirligi
-                        # Ornek: 0.8 / 1.0 * 0.6 = 0.48. Bu, farkli model olceklerini ayni banda getirir.
-                        normalized = (score / max_ncf) * weight_details['ncf']
-                        final_scores[pid] = normalized
-                        reasons[pid] = ('ncf', None)
+                        # Normalize edilen katki = (aday_skoru / en_yuksek_skor) * mf_agirligi.
+                        # Farkli model olceklerini ayni 0-1 bandina getirir.
+                        normalized = (score / max_mf) * weight_details['mf']
+                        final_scores[pid] = final_scores.get(pid, 0) + normalized
+                        contributions.setdefault(pid, {})['mf'] = normalized
 
-        # 2. Icerik tabanli skorlar
+        # 2. Item-Item CF (Amazon "bunu alanlar sunu da aldi") skorlari
+        # Kullanicinin etkilesime girdigi urunlerin davranissal komsulari one cikar.
+        if self.itemitem.is_trained and user_interactions:
+            itemitem_scores = self.itemitem.get_user_itemcf_scores(
+                user_interactions, exclude_ids
+            )
+            if itemitem_scores:
+                max_ii = max(itemitem_scores.values()) or 1
+                for pid, score in itemitem_scores.items():
+                    if pid not in exclude_ids:
+                        # Item-item katkisi da ayni olcege cekilir.
+                        normalized = (score / max_ii) * weight_details['item_item']
+                        final_scores[pid] = final_scores.get(pid, 0) + normalized
+                        contributions.setdefault(pid, {})['item_item'] = normalized
+
+        # 3. Icerik tabanli skorlar
         # Icerik tabanli skorlar benzer urun semantiklerini kullanarak ilgiyi genisletir.
         if self.content.is_trained and user_interactions:
             content_scores = self.content.get_user_content_scores(
@@ -1101,13 +1121,12 @@ class HybridRecommender:
                 for pid, score in content_scores.items():
                     if pid not in exclude_ids:
                         # Icerik katkisi da ayni olcege cekilir.
-                        # Ornek: 0.5 / 0.5 * 0.3 = 0.3. En iyi icerik adayi agirligin tamamini alir.
+                        # Ornek: 0.5 / 0.5 * 0.25 = 0.25. En iyi icerik adayi agirligin tamamini alir.
                         normalized = (score / max_content) * weight_details['content']
                         final_scores[pid] = final_scores.get(pid, 0) + normalized
-                        if pid not in reasons:
-                            reasons[pid] = ('content', None)
+                        contributions.setdefault(pid, {})['content'] = normalized
 
-        # 3. Populerlik skorlari
+        # 4. Populerlik skorlari
         popularity_scores = self._get_popularity_scores()
         if popularity_scores:
             # Populerlik katmani soguk baslangicta emniyet agirligi olarak calisir.
@@ -1118,10 +1137,17 @@ class HybridRecommender:
                     # Ornek: 12 / 15 * 0.8 = 0.64. Boylesi yeni kullanicida listeyi dengeler.
                     normalized = (score / max_pop) * weight_details['popularity']
                     final_scores[pid] = final_scores.get(pid, 0) + normalized
-                    if pid not in reasons:
-                        reasons[pid] = ('popular', None)
+                    contributions.setdefault(pid, {})['popular'] = normalized
 
-        # 4. Arama gecmisi bonusu
+        # Gerekce atamasi: her urun icin EN COK katki yapan kule sebep olarak secilir.
+        # Boost'lar (arama/fiyat/yeni/...) asagida kendi oncelik kurallariyla bu sebebi
+        # gerektiginde gecersiz kilar.
+        for pid, contrib in contributions.items():
+            if contrib:
+                best_source = max(contrib.items(), key=lambda kv: kv[1])[0]
+                reasons[pid] = (best_source, None)
+
+        # 5. Arama gecmisi bonusu
         search_boosts = self._get_search_boosts(user)
         # Arama terimleri acik niyet sinyali oldugu icin agirliklara dogrudan ek bonus veriyoruz.
         for pid, boost in search_boosts.items():
@@ -1136,7 +1162,11 @@ class HybridRecommender:
                 # Fiyat araligi uyumu yalnizca mevcut adaylara eklenir.
                 # Ornek: mevcut skor 0.62 ise 0.1 bonus sonrasi 0.72 olur.
                 final_scores[pid] += boost
-                if boost > 0.1 and reasons.get(pid, (None,))[0] not in ('search',):
+                # Fiyat bir YEDEK gerekcedir: yalnizca daha guclu bir kisilestirme
+                # sebebi (MF/item-item/content/search) yoksa etiketi yaz. Aksi halde
+                # neredeyse tum adaylar fiyat araligina girdigi icin "butcenize uygun"
+                # tum daha anlamli gerekceleri ezerdi.
+                if boost > 0.1 and reasons.get(pid, (None,))[0] in (None, 'popular'):
                     reasons[pid] = ('price', None)
 
         # 6. Yeni urun kesif bonusu
@@ -1208,38 +1238,45 @@ class HybridRecommender:
 
     def _get_adaptive_weights(self, user_interactions):
         """
-        Kullanici etkilesim derinligine gore hibrit agirliklari secer.
+        Kullanici etkilesim derinligine gore dort kule agirligini secer.
 
         Args:
             user_interactions: {product_id: skor} biciminde pozitif etkilesim haritasi.
 
         Returns:
-            (ncf, content, popularity) agirlik uclusu.
+            (mf, item_item, content, popularity) agirlik dortlusu — toplami 1.0.
 
-        Bu esik yapisi secildi cunku soguk baslangicta populerlik daha guvenilir,
-        etkilesim biriktikce de NCF kisilestirme kalitesini daha iyi tasir.
+        Mantik: soguk baslangicta CF kuleleri (MF + item-item) calisamaz cunku
+        kullanicinin latent vektoru/sepeti yoktur; bu yuzden populerlik baskindir.
+        Etkilesim biriktikce davranissal kuleler (MF, item-item) one cikar,
+        populerlik emniyet agina geriler.
         """
         interaction_count = self._count_meaningful_interactions(user_interactions)
 
-        # 0 etkilesim: isbirlikci filtreleme guvenilmezdir, bu yuzden populerlik %80'e cikar.
+        # 0 etkilesim (cold_start): CF kuleleri sinyalsiz; populerlik %75 ile ana surucu.
         if interaction_count == 0:
-            return (0.0, 0.2, 0.8)
-        # 1-4 etkilesim: ilk tercihler gorunur, ama populerlik hala ana emniyet agidir.
+            return (0.0, 0.0, 0.25, 0.75)
+        # 1-4 etkilesim (light): ilk davranissal sinyaller gorunur ama populerlik hala onemli.
         if interaction_count < 5:
-            return (0.2, 0.3, 0.5)
-        # 5-19 etkilesim: icerik ve NCF birlikte calisir, dengeli faz budur.
+            return (0.10, 0.25, 0.30, 0.35)
+        # 5-19 etkilesim (balanced): MF + item-item + content birlikte; dengeli faz.
         if interaction_count < 20:
-            return (0.4, 0.3, 0.3)
-        # 20+ etkilesim: olgun profil, NCF %60 ile ana surucu haline gelir.
-        return (0.6, 0.3, 0.1)
+            return (0.25, 0.30, 0.30, 0.15)
+        # 20+ etkilesim (active): olgun profil; MF + item-item ana suruculer, populerlik geriler.
+        return (0.35, 0.35, 0.25, 0.05)
 
     def _build_weight_details(self, user_interactions):
         """Tek kullanici icin API'ye hazir adaptif agirlik sozlugunu kurar."""
-        ncf_weight, content_weight, popularity_weight = self._get_adaptive_weights(user_interactions)
+        mf_weight, item_item_weight, content_weight, popularity_weight = (
+            self._get_adaptive_weights(user_interactions)
+        )
         return {
-            'ncf': ncf_weight,
+            'mf': mf_weight,
+            'item_item': item_item_weight,
             'content': content_weight,
             'popularity': popularity_weight,
+            # Geriye donuk uyumluluk: eski kod/test 'ncf' anahtarini okuyabilir (= MF agirligi).
+            'ncf': mf_weight,
             'user_tier': self._get_user_tier(user_interactions),
             'interaction_count': self._count_meaningful_interactions(user_interactions),
         }
@@ -1890,13 +1927,24 @@ class HybridRecommender:
                 elif cat_name:
                     return f"{cat_name} ilgi alanınıza göre"
                 return "Görüntüleme geçmişinize göre"
-            elif source == 'ncf':
-                if top_viewed:
+            elif source == 'item_item':
+                # Amazon tarzi davranissal komsuluk: "bunu alanlar sunu da aldi".
+                # Anchor urun, adayin KENDISI ise (kullanici onu cok gormus) dongusel
+                # ifadeden kacinmak icin kategori temelli metne duseriz.
+                if top_viewed and top_viewed != product.name:
+                    short_name = top_viewed[:30] + ('…' if len(top_viewed) > 30 else '')
+                    return f"\"{short_name}\" alanlar bunu da aldı"
+                elif cat_name:
+                    return f"{cat_name} alanlar bunu da tercih etti"
+                return "Birlikte sık tercih edilenler"
+            elif source in ('mf', 'ncf'):
+                # Matrix Factorization: latent zevk benzerligi ("zevkinize gore").
+                if top_viewed and top_viewed != product.name:
                     short_name = top_viewed[:30] + ('…' if len(top_viewed) > 30 else '')
                     return f"\"{short_name}\" beğenenler bunu da beğendi"
                 elif cat_name:
-                    return f"{cat_name} kategorisinde sizin için seçildi"
-                return "Kullanıcı davranışlarınıza göre"
+                    return f"{cat_name} kategorisinde zevkinize göre seçildi"
+                return "Zevkinize göre seçildi"
             elif source == 'popular':
                 if cat_name:
                     return f"{cat_name} kategorisinde popüler"
@@ -2011,19 +2059,182 @@ class HybridRecommender:
 
         return diverse_items
 
+    # -----------------------------------------------------------------------
+    # Siralama degerlendirmesi (R² yerine gercek oneri kalitesi)
+    # -----------------------------------------------------------------------
+    def _score_all_items_for_eval(self, user, seed_interactions, mf_model, itemitem_model):
+        """
+        Degerlendirme icin verilen tohum etkilesimlerinden tum urunlere hibrit skor
+        uretir. recommend()'in skorlama cekirdegini ozetler (boost'lar haric) ama
+        hicbir urunu exclude etmez; boylece holdout urun de siralanabilir.
+
+        MF ve item-item kuleleri DISARIDAN verilir cunku LOO sirasinda bunlar
+        holdout kenarlari gizlenerek yeniden egitilmis gecici modellerdir; content
+        ise yalnizca urun metnine baktigi icin sizinti uretmez ve self.content kullanilir.
+        """
+        w_mf, w_item_item, w_content, w_pop = self._get_adaptive_weights(seed_interactions)
+        scores = {}
+
+        def _blend(source_scores, weight):
+            if not source_scores or weight <= 0:
+                return
+            max_v = max(source_scores.values()) or 1
+            for pid, value in source_scores.items():
+                scores[pid] = scores.get(pid, 0.0) + (value / max_v) * weight
+
+        if mf_model is not None and mf_model.is_trained:
+            _blend(mf_model.predict_for_user(user.id, None), w_mf)
+        if itemitem_model is not None and itemitem_model.is_trained and seed_interactions:
+            _blend(itemitem_model.get_user_itemcf_scores(seed_interactions), w_item_item)
+        if self.content.is_trained and seed_interactions:
+            _blend(self.content.get_user_content_scores(seed_interactions), w_content)
+        _blend(self._get_popularity_scores(), w_pop)
+
+        return scores
+
+    def evaluate_ranking(self, k=10):
+        """
+        Gercek leave-one-out siralama degerlendirmesi.
+
+        Her uygun kullanicinin en yeni pozitif etkilesimi (holdout) saklanir. Sizinti
+        olmamasi icin TUM holdout kenarlari veriden gizlenip MF ve Item-Item modelleri
+        GECICI olarak yeniden egitilir; ardindan her kullanici icin tum urunler
+        siralanip holdout urunun top-K'ya girip girmedigine bakilir. Boylece model,
+        tahmin ettigi urunu egitimde hic gormemis olur — metrik durust ve anlamlidir.
+
+        R² (regresyon) yerine oneri sistemlerinde standart olan **Recall@K, NDCG@K ve
+        MAP@K** dondurur (kullanici ortalamasi).
+
+        Returns:
+            {'eval_users', 'eval_k', 'recall_at_k', 'ndcg_at_k', 'map_at_k'} sozlugu.
+        """
+        from .models import ProductOwnership, WishlistItem, Review, ViewHistory
+
+        # Kullanici basina (zaman_damgasi, product_id, agirlik) pozitif olaylari topla.
+        events = {}  # {user_id: [(ts, pid, weight), ...]}
+
+        def add_event(uid, ts, pid, weight):
+            if uid is None or pid is None or ts is None:
+                return
+            events.setdefault(uid, []).append((ts, pid, weight))
+
+        for p in ProductOwnership.objects.values('customer_id', 'product_id', 'purchase_date'):
+            add_event(p['customer_id'], p['purchase_date'], p['product_id'], 5.0)
+        for w in WishlistItem.objects.filter(
+            wishlist__customer__isnull=False
+        ).values('wishlist__customer_id', 'product_id', 'added_at'):
+            add_event(w['wishlist__customer_id'], w['added_at'], w['product_id'], 3.0)
+        for r in Review.objects.filter(rating__gt=3).values('customer_id', 'product_id', 'rating', 'created_at'):
+            add_event(r['customer_id'], r['created_at'], r['product_id'], float(r['rating']))
+        for v in ViewHistory.objects.values('customer_id', 'product_id', 'view_count', 'viewed_at'):
+            add_event(v['customer_id'], v['viewed_at'], v['product_id'], min(v['view_count'] or 1, 5) * 1.0)
+
+        # 1. Adim: her uygun kullanici icin holdout urunu ve tohum sinyallerini belirle.
+        eval_plan = {}    # {uid: (holdout_pid, seed_dict)}
+        exclude_edges = set()
+        for uid, user_events in events.items():
+            distinct_pids = {pid for _, pid, _ in user_events}
+            if len(distinct_pids) < 2:
+                continue  # holdout uretmek icin en az 2 farkli urun gerekir.
+
+            # En yeni olay holdout. date/datetime karisik olabildigi icin str ile sirala.
+            user_events_sorted = sorted(user_events, key=lambda e: str(e[0]))
+            holdout_pid = user_events_sorted[-1][1]
+
+            seed = {}
+            for _, pid, weight in user_events_sorted[:-1]:
+                if pid == holdout_pid:
+                    continue
+                seed[pid] = seed.get(pid, 0.0) + weight
+            if not seed:
+                continue
+
+            eval_plan[uid] = (holdout_pid, seed)
+            exclude_edges.add((uid, holdout_pid))
+
+        if not eval_plan:
+            return {
+                'eval_users': 0,
+                'eval_k': k,
+                'recall_at_k': None,
+                'ndcg_at_k': None,
+                'map_at_k': None,
+            }
+
+        # 2. Adim: holdout kenarlari gizlenmis GECICI CF modelleri egit (sizinti yok).
+        eval_mf = MatrixFactorizationModel()
+        eval_mf.train(verbose=False, exclude_edges=exclude_edges)
+        eval_itemitem = ItemItemCFModel()
+        eval_itemitem.train(verbose=False, exclude_edges=exclude_edges)
+
+        # 3. Adim: her kullanici icin sirala ve holdout'un top-K'da olup olmadigina bak.
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+
+        recalls, ndcgs, average_precisions = [], [], []
+        for uid, (holdout_pid, seed) in eval_plan.items():
+            try:
+                user = User.objects.get(id=uid)
+            except User.DoesNotExist:
+                continue
+
+            scores = self._score_all_items_for_eval(user, seed, eval_mf, eval_itemitem)
+            # Bilinen tohum urunleri siralamadan cikar; holdout aday olarak kalir.
+            for pid in seed:
+                scores.pop(pid, None)
+
+            ranked = [pid for pid, _ in sorted(scores.items(), key=lambda x: x[1], reverse=True)[:k]]
+
+            if holdout_pid in ranked:
+                rank = ranked.index(holdout_pid)  # 0-tabanli
+                recalls.append(1.0)
+                ndcgs.append(1.0 / math.log2(rank + 2))
+                average_precisions.append(1.0 / (rank + 1))
+            else:
+                recalls.append(0.0)
+                ndcgs.append(0.0)
+                average_precisions.append(0.0)
+
+        n = len(recalls)
+        if n == 0:
+            return {
+                'eval_users': 0,
+                'eval_k': k,
+                'recall_at_k': None,
+                'ndcg_at_k': None,
+                'map_at_k': None,
+            }
+
+        return {
+            'eval_users': n,
+            'eval_k': k,
+            'recall_at_k': round(sum(recalls) / n, 4),
+            'ndcg_at_k': round(sum(ndcgs) / n, 4),
+            'map_at_k': round(sum(average_precisions) / n, 4),
+        }
+
     def get_metrics(self):
         """Return training metrics for diagnostics."""
         return {
+            # 'ncf' anahtari geriye donuk uyumluluk icin korunur; artik MF
+            # (Matrix Factorization) modelinin egitim ve siralama metriklerini tasir.
             'ncf': self.ncf.training_metrics if self.ncf.is_trained else None,
+            'mf': self.ncf.training_metrics if self.ncf.is_trained else None,
+            'item_item': {
+                'n_items': len(self.itemitem.item_ids) if self.itemitem.item_ids is not None else 0,
+                'is_trained': self.itemitem.is_trained,
+            },
             'content': {
                 'n_products': len(self.content.products_df) if self.content.products_df is not None else 0,
                 'is_trained': self.content.is_trained,
             },
             'models_loaded': self._loaded,
             'weights': {
-                'ncf': self.WEIGHT_NCF,
+                'mf': self.WEIGHT_MF,
+                'item_item': self.WEIGHT_ITEM_ITEM,
                 'content': self.WEIGHT_CONTENT,
                 'popularity': self.WEIGHT_POPULARITY,
+                'ncf': self.WEIGHT_MF,  # geriye donuk uyumluluk
             }
         }
 

@@ -641,31 +641,63 @@ class RecommendationViewSet(viewsets.ModelViewSet):
         dismissed_pids = set(Recommendation.objects.filter(
             customer=request.user, dismissed=True,
         ).values_list('product_id', flat=True))
+        exclude = owner_owned | dismissed_pids | {product_id_int}
 
         recommender = get_recommender()
+
+        # Once gercek birlikte-satin-alma (Amazon co-purchase) sinyali.
         raw = recommender.get_co_purchase_products(
             product_id_int,
-            top_n=limit + len(owner_owned) + len(dismissed_pids),
-            exclude_ids=owner_owned | dismissed_pids,
+            top_n=limit + len(exclude),
+            exclude_ids=exclude,
         )
 
-        if not raw:
+        # (product_id, co_purchase_count|None) sirali listesi. None → item-item fallback.
+        ordered = [(item['product_id'], item['co_purchase_count']) for item in raw]
+        seen = {pid for pid, _ in ordered}
+
+        # Fallback: kucuk/seyrek katalogda saf satin-alma co-occurrence cogu urun icin
+        # bos kalir; bu durumda Item-Item CF davranissal komsulariyla karuseli doldururuz
+        # ki "Birlikte Alinanlar" hep gosterilebilsin.
+        if len(ordered) < limit and getattr(recommender, 'itemitem', None) and recommender.itemitem.is_trained:
+            for pid, _sim in recommender.itemitem.get_cooccurring(
+                product_id_int,
+                top_n=limit + len(exclude),
+                exclude_ids=exclude,
+            ):
+                if pid in seen:
+                    continue
+                ordered.append((pid, None))
+                seen.add(pid)
+                if len(ordered) >= limit:
+                    break
+
+        if not ordered:
             return Response({
                 'product_id': product_id_int,
                 'bundles': [],
             })
 
-        pids = [item['product_id'] for item in raw][:limit]
+        ordered = ordered[:limit]
+        pids = [pid for pid, _ in ordered]
         product_map = {
             p.id: p
             for p in Product.objects.filter(id__in=pids).select_related('category')
         }
 
+        def _image_url(product):
+            """ProductSerializer ile ayni mantik: http URL ise oldugu gibi, degilse .url."""
+            try:
+                if product.image:
+                    name = str(product.image.name)
+                    return name if name.startswith(('http', 'https')) else product.image.url
+            except Exception:
+                pass
+            return None
+
         bundles = []
-        for item in raw:
-            if len(bundles) >= limit:
-                break
-            product = product_map.get(item['product_id'])
+        for pid, co_count in ordered:
+            product = product_map.get(pid)
             if not product:
                 continue
             bundles.append({
@@ -673,8 +705,9 @@ class RecommendationViewSet(viewsets.ModelViewSet):
                 'name': product.name,
                 'brand': product.brand,
                 'price': str(product.price),
+                'image': _image_url(product),
                 'category_name': product.category.name if product.category else None,
-                'co_purchase_count': item['co_purchase_count'],
+                'co_purchase_count': co_count,
             })
 
         return Response({

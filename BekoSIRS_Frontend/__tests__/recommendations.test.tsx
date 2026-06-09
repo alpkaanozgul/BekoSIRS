@@ -107,29 +107,29 @@ describe('RecommendationsScreen Tests', () => {
     });
 
     it('renders recommendations correctly', async () => {
-        const { getByText } = render(<RecommendationsScreen />);
+        const { getByText, queryByText } = render(<RecommendationsScreen />);
 
         await waitFor(() => {
             // Header
             expect(getByText('🤖 ML Önerileri')).toBeTruthy();
-            expect(getByText('Neural Collaborative Filtering ile oluşturuldu')).toBeTruthy();
+            expect(getByText('Yapay zeka ile sizin için seçildi')).toBeTruthy();
 
-            // First Recommendation
+            // First Recommendation — insancil gerekce gosterilir, ham skor/kule kirilimi DEGIL.
             expect(getByText('Akıllı TV 4K')).toBeTruthy();
             expect(getByText('Beko')).toBeTruthy();
             expect(getByText('Televizyon aramalarınıza göre')).toBeTruthy();
             expect(getByText(/25\.000,00/)).toBeTruthy();
-            expect(getByText('0.950')).toBeTruthy();
             expect(getByText('Stokta')).toBeTruthy();
-            expect(getByText('NCF: 0.38')).toBeTruthy();
-            expect(getByText('İçerik: 0.28')).toBeTruthy();
-            expect(getByText('Popülerlik: 0.28')).toBeTruthy();
 
             // Second Recommendation
             expect(getByText('Robot Süpürge')).toBeTruthy();
-            expect(getByText('0.650')).toBeTruthy();
             expect(getByText('Stok Yok')).toBeTruthy();
         });
+
+        // Ham skor ve kule kirilimi musteriye GOSTERILMEMELI.
+        expect(queryByText('0.950')).toBeNull();
+        expect(queryByText('NCF: 0.38')).toBeNull();
+        expect(queryByText(/İçerik: 0\.28/)).toBeNull();
     });
 
     it('handles "Add to Wishlist" successfully', async () => {

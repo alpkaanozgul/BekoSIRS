@@ -144,9 +144,12 @@ class IntegrationFlowTestCase(APITestCase):
 
         weights = first_response.data["ml_metrics"]["weights_used"]
         self.assertEqual(weights["user_tier"], "cold_start")
-        self.assertEqual(weights["ncf"], 0.0)
-        self.assertEqual(weights["content"], 0.2)
-        self.assertEqual(weights["popularity"], 0.8)
+        # 4 kule tasarimi: soguk baslangicta MF + item-item sifir, populerlik baskin.
+        self.assertEqual(weights["mf"], 0.0)
+        self.assertEqual(weights["item_item"], 0.0)
+        self.assertEqual(weights["content"], 0.25)
+        self.assertEqual(weights["popularity"], 0.75)
+        self.assertEqual(weights["ncf"], 0.0)  # geriye donuk uyumluluk = MF
 
         recommendation_id = first_response.data["recommendations"][0]["id"]
         product_id = first_response.data["recommendations"][0]["product"]["id"]

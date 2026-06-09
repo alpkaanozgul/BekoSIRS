@@ -241,7 +241,7 @@ export default {
   // Recommendations Page
   recs: {
     title: '🤖 ML Recommendations',
-    subtitle: 'Powered by Neural Collaborative Filtering',
+    subtitle: 'Hand-picked for you by AI',
     loading: 'ML model is running...',
     productsRecommended: 'products recommended',
     pullToRefresh: 'Pull down to refresh',
@@ -281,6 +281,7 @@ export default {
     addReview: 'Review',
     noReviews: 'No reviews yet. Be the first to review!',
     reviewCount: 'reviews',
+    frequentlyBought: 'Frequently Bought Together',
     wishlist: 'Favorites',
     inList: 'In Favorites',
     serviceRequest: 'Service Request',

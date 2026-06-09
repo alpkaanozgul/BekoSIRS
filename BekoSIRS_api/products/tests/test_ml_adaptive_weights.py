@@ -22,24 +22,29 @@ def _build_recommender_for_unit_test():
 
 
 def test_cold_start_user_gets_high_popularity_weight():
-    """0 etkilesimli kullanicida populerlik agirligi baskin olmali."""
+    """0 etkilesimli kullanicida CF kuleleri sifir, populerlik baskin olmali."""
     recommender = _build_recommender_for_unit_test()
-    ncf, content, popularity = recommender._get_adaptive_weights({})
+    mf, item_item, content, popularity = recommender._get_adaptive_weights({})
 
-    assert ncf == pytest.approx(0.0)
-    assert content == pytest.approx(0.2)
+    # Soguk baslangicta MF (latent vektor yok) ve item-item (sepet yok) calisamaz.
+    assert mf == pytest.approx(0.0)
+    assert item_item == pytest.approx(0.0)
+    assert content == pytest.approx(0.25)
     assert popularity >= 0.7
+    # Agirliklar toplami 1.0 olmali.
+    assert mf + item_item + content + popularity == pytest.approx(1.0)
 
 
-def test_active_user_gets_high_ncf_weight():
-    """Yuksek etkilesimli kullanicida NCF agirligi baskin olmali."""
+def test_active_user_gets_high_cf_weight():
+    """Yuksek etkilesimli kullanicida CF kuleleri (MF + item-item) baskin olmali."""
     recommender = _build_recommender_for_unit_test()
     interactions = {product_id: 1.0 for product_id in range(1, 26)}
-    ncf, content, popularity = recommender._get_adaptive_weights(interactions)
+    mf, item_item, content, popularity = recommender._get_adaptive_weights(interactions)
 
-    assert ncf >= 0.5
-    assert content == pytest.approx(0.3)
-    assert popularity <= 0.1
+    assert mf >= 0.3
+    assert item_item >= 0.3
+    assert popularity <= 0.05
+    assert mf + item_item + content + popularity == pytest.approx(1.0)
 
 
 @pytest.mark.django_db
@@ -69,10 +74,14 @@ def test_recommendation_list_returns_weights_used_for_cold_start():
     client.force_authenticate(user=user)
     response = client.get('/api/v1/recommendations/')
 
-    # Bu alanlar mobil ekrandaki skor kirilimini besledigi icin API seviyesinde
-    # dogruluyoruz; soguk baslangicta NCF sifir, populerlik ise en yuksek olmalidir.
+    # Bu alanlar API'nin adaptif agirliklari dogru yansittigini gosterir; soguk
+    # baslangicta MF + item-item sifir, populerlik ise en yuksek olmalidir.
     assert response.status_code == 200
-    assert response.data['ml_metrics']['weights_used']['ncf'] == pytest.approx(0.0)
-    assert response.data['ml_metrics']['weights_used']['content'] == pytest.approx(0.2)
-    assert response.data['ml_metrics']['weights_used']['popularity'] == pytest.approx(0.8)
-    assert response.data['ml_metrics']['weights_used']['user_tier'] == 'cold_start'
+    weights_used = response.data['ml_metrics']['weights_used']
+    assert weights_used['mf'] == pytest.approx(0.0)
+    assert weights_used['item_item'] == pytest.approx(0.0)
+    assert weights_used['content'] == pytest.approx(0.25)
+    assert weights_used['popularity'] == pytest.approx(0.75)
+    assert weights_used['user_tier'] == 'cold_start'
+    # Geriye donuk uyumluluk anahtari 'ncf' = MF agirligi olarak hala mevcut olmali.
+    assert weights_used['ncf'] == pytest.approx(0.0)
