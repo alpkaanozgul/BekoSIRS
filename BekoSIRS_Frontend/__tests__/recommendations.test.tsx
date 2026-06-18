@@ -107,29 +107,29 @@ describe('RecommendationsScreen Tests', () => {
     });
 
     it('renders recommendations correctly', async () => {
-        const { getByText } = render(<RecommendationsScreen />);
+        const { getByText, queryByText } = render(<RecommendationsScreen />);
 
         await waitFor(() => {
             // Header
             expect(getByText('🤖 ML Önerileri')).toBeTruthy();
-            expect(getByText('Neural Collaborative Filtering ile oluşturuldu')).toBeTruthy();
+            expect(getByText('Yapay zeka ile sizin için seçildi')).toBeTruthy();
 
-            // First Recommendation
+            // First Recommendation — insancil gerekce gosterilir, ham skor/kule kirilimi DEGIL.
             expect(getByText('Akıllı TV 4K')).toBeTruthy();
             expect(getByText('Beko')).toBeTruthy();
             expect(getByText('Televizyon aramalarınıza göre')).toBeTruthy();
             expect(getByText(/25\.000,00/)).toBeTruthy();
-            expect(getByText('0.950')).toBeTruthy();
             expect(getByText('Stokta')).toBeTruthy();
-            expect(getByText('NCF: 0.38')).toBeTruthy();
-            expect(getByText('İçerik: 0.28')).toBeTruthy();
-            expect(getByText('Popülerlik: 0.28')).toBeTruthy();
 
             // Second Recommendation
             expect(getByText('Robot Süpürge')).toBeTruthy();
-            expect(getByText('0.650')).toBeTruthy();
             expect(getByText('Stok Yok')).toBeTruthy();
         });
+
+        // Ham skor ve kule kirilimi musteriye GOSTERILMEMELI.
+        expect(queryByText('0.950')).toBeNull();
+        expect(queryByText('NCF: 0.38')).toBeNull();
+        expect(queryByText(/İçerik: 0\.28/)).toBeNull();
     });
 
     it('handles "Add to Wishlist" successfully', async () => {
@@ -139,16 +139,16 @@ describe('RecommendationsScreen Tests', () => {
 
         // Because Robot Süpürge is already in wishlist, its button text should be different (wait for wishlist to load)
         await waitFor(() => {
-            expect(getByText('İstek Listesinde')).toBeTruthy(); // Robot Süpürge
-            expect(getAllByText('İstek Listesine Ekle').length).toBeGreaterThan(0); // TV
+            expect(getByText('Favorilerde')).toBeTruthy(); // Robot Süpürge
+            expect(getAllByText('Favorilere Ekle').length).toBeGreaterThan(0); // TV
         });
 
-        const addBtns = getAllByText('İstek Listesine Ekle');
+        const addBtns = getAllByText('Favorilere Ekle');
         fireEvent.press(addBtns[0]); // Press the first valid btn (Akıllı TV)
 
         await waitFor(() => {
             expect(wishlistAPI.addItem).toHaveBeenCalledWith(10);
-            expect(Alert.alert).toHaveBeenCalledWith('Başarılı', '"Akıllı TV 4K" istek listenize eklendi!');
+            expect(Alert.alert).toHaveBeenCalledWith('Başarılı', '"Akıllı TV 4K" favorilerinize eklendi!');
         });
     });
 

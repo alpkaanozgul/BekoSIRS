@@ -420,6 +420,16 @@ class RecommendationViewSet(viewsets.ModelViewSet):
 
         serialized_recommendations = RecommendationSerializer(recommendations, many=True).data
 
+        # Öneri listesi kullanıcıya ulaştı — impression tracking (CTR paydasını güncelle).
+        # Bulk update ile N+1 sorgusu önlenir; is_shown zaten False'tı, tekrar yazma ucuz.
+        try:
+            shown_ids = [r.id for r in (recommendations if isinstance(recommendations, list)
+                         else list(recommendations))]
+            if shown_ids:
+                Recommendation.objects.filter(id__in=shown_ids).update(is_shown=True)
+        except Exception:
+            pass
+
         # Fetch ml metrics from memory (no DB call)
         ml_metrics = {
             'diversity_score': 0.0,
@@ -438,22 +448,29 @@ class RecommendationViewSet(viewsets.ModelViewSet):
             advanced_metrics = recommender.get_advanced_metrics(serialized_recommendations)
             if hasattr(recommender, '_loaded') and recommender._loaded:
                 metrics = recommender.get_metrics()
-                ncf_metrics = metrics.get('ncf', {})
+                # 'ncf' anahtarı geriye dönük uyumluluk için korunur; içerik
+                # artık MatrixFactorizationModel (TruncatedSVD) metriklerini taşır.
+                mf_metrics = metrics.get('mf') or metrics.get('ncf') or {}
                 content_metrics = metrics.get('content', {})
                 ml_metrics = {
-                    'train_r2': ncf_metrics.get('train_r2') if ncf_metrics else None,
-                    'test_r2': ncf_metrics.get('test_r2') if ncf_metrics else None,
-                    'hit_rate_at_10': ncf_metrics.get('hit_rate_at_10') if ncf_metrics else None,
-                    'n_interactions': ncf_metrics.get('n_interactions') if ncf_metrics else None,
-                    'n_users': ncf_metrics.get('n_users') if ncf_metrics else None,
-                    'n_products': ncf_metrics.get('n_products') if ncf_metrics else None,
-                    'n_epochs': ncf_metrics.get('n_epochs') if ncf_metrics else None,
-                    'final_loss': ncf_metrics.get('final_loss') if ncf_metrics else None,
-                    'trained_at': ncf_metrics.get('trained_at') if ncf_metrics else None,
-                    'content_products': content_metrics.get('n_products') if content_metrics else 0,
-                    'weights': metrics.get('weights', {}),
-                    'weights_used': runtime_weights,
-                    'user_tier': runtime_weights.get('user_tier'),
+                    # Eski NCF metrikleri kaldırıldı (train_r2, test_r2, hit_rate_at_10,
+                    # n_epochs, final_loss); MF modelinin gerçek metriklerine geçildi.
+                    'algorithm':          mf_metrics.get('algorithm'),
+                    'explained_variance': mf_metrics.get('explained_variance'),
+                    'n_components':       mf_metrics.get('n_components'),
+                    'recall_at_k':        mf_metrics.get('recall_at_k'),
+                    'ndcg_at_k':          mf_metrics.get('ndcg_at_k'),
+                    'map_at_k':           mf_metrics.get('map_at_k'),
+                    'eval_k':             mf_metrics.get('eval_k'),
+                    'n_interactions':     mf_metrics.get('n_interactions'),
+                    'n_users':            mf_metrics.get('n_users'),
+                    'n_products':         mf_metrics.get('n_products'),
+                    'trained_at':         mf_metrics.get('trained_at'),
+                    'content_products':   content_metrics.get('n_products', 0),
+                    'weights':            metrics.get('weights', {}),
+                    'weights_used':       runtime_weights,
+                    'user_tier':          runtime_weights.get('user_tier'),
+                    'online_metrics':     metrics.get('online_metrics', {}),
                 }
             else:
                 ml_metrics = {
@@ -641,31 +658,63 @@ class RecommendationViewSet(viewsets.ModelViewSet):
         dismissed_pids = set(Recommendation.objects.filter(
             customer=request.user, dismissed=True,
         ).values_list('product_id', flat=True))
+        exclude = owner_owned | dismissed_pids | {product_id_int}
 
         recommender = get_recommender()
+
+        # Once gercek birlikte-satin-alma (Amazon co-purchase) sinyali.
         raw = recommender.get_co_purchase_products(
             product_id_int,
-            top_n=limit + len(owner_owned) + len(dismissed_pids),
-            exclude_ids=owner_owned | dismissed_pids,
+            top_n=limit + len(exclude),
+            exclude_ids=exclude,
         )
 
-        if not raw:
+        # (product_id, co_purchase_count|None) sirali listesi. None → item-item fallback.
+        ordered = [(item['product_id'], item['co_purchase_count']) for item in raw]
+        seen = {pid for pid, _ in ordered}
+
+        # Fallback: kucuk/seyrek katalogda saf satin-alma co-occurrence cogu urun icin
+        # bos kalir; bu durumda Item-Item CF davranissal komsulariyla karuseli doldururuz
+        # ki "Birlikte Alinanlar" hep gosterilebilsin.
+        if len(ordered) < limit and getattr(recommender, 'itemitem', None) and recommender.itemitem.is_trained:
+            for pid, _sim in recommender.itemitem.get_cooccurring(
+                product_id_int,
+                top_n=limit + len(exclude),
+                exclude_ids=exclude,
+            ):
+                if pid in seen:
+                    continue
+                ordered.append((pid, None))
+                seen.add(pid)
+                if len(ordered) >= limit:
+                    break
+
+        if not ordered:
             return Response({
                 'product_id': product_id_int,
                 'bundles': [],
             })
 
-        pids = [item['product_id'] for item in raw][:limit]
+        ordered = ordered[:limit]
+        pids = [pid for pid, _ in ordered]
         product_map = {
             p.id: p
             for p in Product.objects.filter(id__in=pids).select_related('category')
         }
 
+        def _image_url(product):
+            """ProductSerializer ile ayni mantik: http URL ise oldugu gibi, degilse .url."""
+            try:
+                if product.image:
+                    name = str(product.image.name)
+                    return name if name.startswith(('http', 'https')) else product.image.url
+            except Exception:
+                pass
+            return None
+
         bundles = []
-        for item in raw:
-            if len(bundles) >= limit:
-                break
-            product = product_map.get(item['product_id'])
+        for pid, co_count in ordered:
+            product = product_map.get(pid)
             if not product:
                 continue
             bundles.append({
@@ -673,8 +722,9 @@ class RecommendationViewSet(viewsets.ModelViewSet):
                 'name': product.name,
                 'brand': product.brand,
                 'price': str(product.price),
+                'image': _image_url(product),
                 'category_name': product.category.name if product.category else None,
-                'co_purchase_count': item['co_purchase_count'],
+                'co_purchase_count': co_count,
             })
 
         return Response({

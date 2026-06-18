@@ -20,6 +20,7 @@ jest.mock('../services', () => ({
     __esModule: true,
     default: {
         get: jest.fn(),
+        post: jest.fn().mockResolvedValue({}),
         defaults: { baseURL: 'http://test.com' },
     },
     wishlistAPI: {

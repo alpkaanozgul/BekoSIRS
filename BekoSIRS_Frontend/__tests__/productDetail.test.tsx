@@ -10,7 +10,7 @@ import { render, fireEvent, waitFor } from '@testing-library/react-native';
 import { Alert, ActivityIndicator } from 'react-native';
 import ProductDetailScreen from '../app/product/[id]';
 import api from '../services';
-import { wishlistAPI, reviewAPI, productOwnershipAPI, viewHistoryAPI } from '../services';
+import { wishlistAPI, reviewAPI, productOwnershipAPI, viewHistoryAPI, recommendationAPI } from '../services';
 
 jest.mock('expo-router', () => {
     const React = require('react');
@@ -52,6 +52,9 @@ jest.mock('../services', () => {
         viewHistoryAPI: {
             recordView: jest.fn(),
         },
+        recommendationAPI: {
+            getBundleProducts: jest.fn().mockResolvedValue({ data: { bundles: [] } }),
+        },
         getImageUrl: jest.fn((url) => url),
     };
 });
@@ -82,6 +85,7 @@ describe('ProductDetailScreen Tests', () => {
         (wishlistAPI.checkItem as jest.Mock).mockResolvedValue({ data: { in_wishlist: false } });
         (productOwnershipAPI.getMyOwnerships as jest.Mock).mockResolvedValue({ data: [] });
         (viewHistoryAPI.recordView as jest.Mock).mockResolvedValue({});
+        (recommendationAPI.getBundleProducts as jest.Mock).mockResolvedValue({ data: { bundles: [] } });
     });
 
     it('renders product details correctly after data fetch', async () => {
@@ -94,6 +98,33 @@ describe('ProductDetailScreen Tests', () => {
         expect(await findByText('24 Ay Garanti')).toBeTruthy();
     });
 
+    it('renders "Birlikte Alınanlar" carousel when bundle products exist', async () => {
+        (recommendationAPI.getBundleProducts as jest.Mock).mockResolvedValue({
+            data: {
+                product_id: 1,
+                bundles: [
+                    { product_id: 42, name: 'Bulaşık Makinesi', brand: 'Beko', price: '15000', image: null, co_purchase_count: 3 },
+                ],
+            },
+        });
+
+        const { findByText } = render(<ProductDetailScreen />);
+
+        // Karusel basligi ve birlikte alinan urun gorunmeli.
+        expect(await findByText('Birlikte Alınanlar')).toBeTruthy();
+        expect(await findByText('Bulaşık Makinesi')).toBeTruthy();
+        expect(recommendationAPI.getBundleProducts).toHaveBeenCalledWith(1, 8);
+    });
+
+    it('hides "Birlikte Alınanlar" carousel when there are no bundle products', async () => {
+        (recommendationAPI.getBundleProducts as jest.Mock).mockResolvedValue({ data: { bundles: [] } });
+
+        const { findByText, queryByText } = render(<ProductDetailScreen />);
+        // Once urun yuklendigini bekle, sonra karusel basliginin olmadigini dogrula.
+        await findByText('Buzdolabı Pro');
+        expect(queryByText('Birlikte Alınanlar')).toBeNull();
+    });
+
     it('handles wishlist toggle correctly', async () => {
         (wishlistAPI.checkItem as jest.Mock).mockResolvedValue({ data: { in_wishlist: false } });
         (wishlistAPI.addItem as jest.Mock).mockResolvedValue({});
@@ -103,12 +134,12 @@ describe('ProductDetailScreen Tests', () => {
         const productName = await findByText('Buzdolabı Pro');
         expect(productName).toBeTruthy();
 
-        const wishlistButton = await findByText('İstek Listesi');
+        const wishlistButton = await findByText('Favoriler');
         fireEvent.press(wishlistButton);
 
-        expect(await findByText('Listede')).toBeTruthy();
+        expect(await findByText('Favorilerde')).toBeTruthy();
         expect(wishlistAPI.addItem).toHaveBeenCalledWith(1);
-        expect(Alert.alert).toHaveBeenCalledWith('Başarılı', 'Ürün istek listesine eklendi');
+        expect(Alert.alert).toHaveBeenCalledWith('Başarılı', 'Ürün favorilerinize eklendi');
     });
 
     it('shows service request button only for owned products', async () => {

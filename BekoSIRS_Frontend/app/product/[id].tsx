@@ -16,7 +16,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { FontAwesome } from '@expo/vector-icons';
-import api, { wishlistAPI, viewHistoryAPI, reviewAPI, productOwnershipAPI, getImageUrl } from '../../services';
+import api, { wishlistAPI, viewHistoryAPI, reviewAPI, productOwnershipAPI, recommendationAPI, getImageUrl } from '../../services';
 import { useLanguage } from '../../context/LanguageContext';
 import { t } from '../../i18n';
 
@@ -53,6 +53,16 @@ interface Review {
   is_approved: boolean;
 }
 
+interface BundleProduct {
+  product_id: number;
+  name: string;
+  brand: string;
+  price: string;
+  image?: string | null;
+  category_name?: string | null;
+  co_purchase_count?: number | null;
+}
+
 const { width } = Dimensions.get('window');
 
 export default function ProductDetailScreen() {
@@ -75,14 +85,29 @@ export default function ProductDetailScreen() {
   const [averageRating, setAverageRating] = useState(0);
   const [similarProducts, setSimilarProducts] = useState<SimilarProduct[]>([]);
   const [similarLoading, setSimilarLoading] = useState(false);
+  const [bundleProducts, setBundleProducts] = useState<BundleProduct[]>([]);
+  const [translatedComments, setTranslatedComments] = useState<Record<number, string>>({});
+  const [translatingIds, setTranslatingIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     if (id) {
       fetchProduct();
       fetchReviews();
       fetchSimilarProducts();
+      fetchBundleProducts();
       checkOwnership();
       recordView();
+    }
+  }, [id]);
+
+  // "Birlikte Alinanlar" — bu urunu alanlarin/inceleyenlerin tercih ettigi urunler.
+  // Backend once gercek satin-alma co-occurrence'a, yoksa Item-Item CF'e duser.
+  const fetchBundleProducts = useCallback(async () => {
+    try {
+      const response = await recommendationAPI.getBundleProducts(Number(id), 8);
+      setBundleProducts(response.data?.bundles || []);
+    } catch (error) {
+      setBundleProducts([]);
     }
   }, [id]);
 
@@ -222,6 +247,30 @@ export default function ProductDetailScreen() {
     }
   };
 
+  const translateComment = async (reviewId: number, comment: string) => {
+    if (translatedComments[reviewId]) {
+      setTranslatedComments(prev => { const n = { ...prev }; delete n[reviewId]; return n; });
+      return;
+    }
+    setTranslatingIds(prev => new Set(prev).add(reviewId));
+    try {
+      const sourceLang = language === 'tr' ? 'tr' : 'en';
+      const targetLang = language === 'tr' ? 'en' : 'tr';
+      const res = await fetch(
+        `https://api.mymemory.translated.net/get?q=${encodeURIComponent(comment)}&langpair=${sourceLang}|${targetLang}`
+      );
+      const data = await res.json();
+      const translated = data.responseData?.translatedText;
+      if (translated) {
+        setTranslatedComments(prev => ({ ...prev, [reviewId]: translated }));
+      }
+    } catch {
+      // sessiz hata
+    } finally {
+      setTranslatingIds(prev => { const n = new Set(prev); n.delete(reviewId); return n; });
+    }
+  };
+
   const renderStars = (rating: number, size: number = 16, interactive: boolean = false) => {
     const stars = [];
     for (let i = 1; i <= 5; i++) {
@@ -264,11 +313,16 @@ export default function ProductDetailScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      <Stack.Screen 
+      <Stack.Screen
         options={{
           headerTitle: t('product.headerTitle'),
           headerBackTitle: t('common.back'),
-        }} 
+          headerLeft: () => (
+            <TouchableOpacity onPress={() => router.back()} style={{ paddingLeft: 8 }}>
+              <FontAwesome name="arrow-left" size={20} color="#fff" />
+            </TouchableOpacity>
+          ),
+        }}
       />
       <ScrollView showsVerticalScrollIndicator={false}>
         {/* Wishlist Button Overlay on Image — hidden if already owned/assigned */}
@@ -404,7 +458,29 @@ export default function ProductDetailScreen() {
                       {renderStars(review.rating, 14)}
                     </View>
                     {review.comment && (
-                      <Text style={styles.reviewComment}>{review.comment}</Text>
+                      <View>
+                        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 6 }}>
+                          <Text style={[styles.reviewComment, { flex: 1 }]}>{review.comment}</Text>
+                          <TouchableOpacity
+                            onPress={() => translateComment(review.id, review.comment)}
+                            style={{ paddingTop: 2 }}
+                          >
+                            {translatingIds.has(review.id)
+                              ? <ActivityIndicator size="small" color="#9CA3AF" />
+                              : <FontAwesome
+                                  name="language"
+                                  size={16}
+                                  color={translatedComments[review.id] ? '#111827' : '#9CA3AF'}
+                                />
+                            }
+                          </TouchableOpacity>
+                        </View>
+                        {translatedComments[review.id] && (
+                          <Text style={[styles.reviewComment, { color: '#6B7280', marginTop: 6, fontStyle: 'italic' }]}>
+                            {translatedComments[review.id]}
+                          </Text>
+                        )}
+                      </View>
                     )}
                     <Text style={styles.reviewDate}>
                       {new Date(review.created_at).toLocaleDateString(language === 'tr' ? 'tr-TR' : 'en-US')}
@@ -421,6 +497,48 @@ export default function ProductDetailScreen() {
               </View>
             )}
           </View>
+
+          {/* Birlikte Alinanlar (Frequently Bought Together) — sadece sonuc varsa goster.
+              Amazon tarzi capraz satis; davranissal birliktelik sinyaliyle uretilir. */}
+          {bundleProducts.length > 0 && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>{t('product.frequentlyBought')}</Text>
+              <FlatList
+                data={bundleProducts}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                keyExtractor={(item) => item.product_id.toString()}
+                contentContainerStyle={{ gap: 12 }}
+                renderItem={({ item }) => {
+                  const imgSrc = item.image ? getImageUrl(item.image) : null;
+                  return (
+                    <TouchableOpacity
+                      style={styles.similarCard}
+                      activeOpacity={0.7}
+                      onPress={() => router.push(`/product/${item.product_id}`)}
+                    >
+                      <View style={styles.similarImageContainer}>
+                        {imgSrc ? (
+                          <Image source={{ uri: imgSrc }} style={styles.similarImage} resizeMode="cover" />
+                        ) : (
+                          <View style={[styles.similarImage, styles.similarImagePlaceholder]}>
+                            <FontAwesome name="image" size={28} color="#D1D5DB" />
+                          </View>
+                        )}
+                      </View>
+                      <View style={styles.similarInfo}>
+                        <Text style={styles.similarName} numberOfLines={2}>{item.name}</Text>
+                        <Text style={styles.similarBrand} numberOfLines={1}>{item.brand}</Text>
+                        <Text style={styles.similarPrice}>
+                          {parseFloat(item.price).toLocaleString('tr-TR', { style: 'currency', currency: 'TRY' })}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                }}
+              />
+            </View>
+          )}
 
           {/* Similar Products Section */}
           <View style={styles.section}>

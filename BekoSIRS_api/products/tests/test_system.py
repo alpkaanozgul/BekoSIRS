@@ -98,9 +98,12 @@ class SystemJourneyTestCase(APITestCase):
 
         weights = recommendation_response.data["ml_metrics"]["weights_used"]
         self.assertEqual(weights["user_tier"], "cold_start")
-        self.assertEqual(weights["ncf"], 0.0)
-        self.assertEqual(weights["content"], 0.2)
-        self.assertEqual(weights["popularity"], 0.8)
+        # 4 kule tasarimi: soguk baslangicta MF + item-item sifir, populerlik baskin.
+        self.assertEqual(weights["mf"], 0.0)
+        self.assertEqual(weights["item_item"], 0.0)
+        self.assertEqual(weights["content"], 0.25)
+        self.assertEqual(weights["popularity"], 0.75)
+        self.assertEqual(weights["ncf"], 0.0)  # geriye donuk uyumluluk = MF
 
         self.assertTrue(Recommendation.objects.filter(customer=user).exists())
 
@@ -179,8 +182,8 @@ class SystemJourneyTestCase(APITestCase):
         )
         self.assertEqual(
             initial_weights["popularity"],
-            0.8,
-            "cold_start seviyesinde populerlik agirliginin 0.8 olmasi bekleniyor",
+            0.75,
+            "cold_start seviyesinde populerlik agirliginin 0.75 olmasi bekleniyor",
         )
 
         # ASAMA 2: Yeterli etkilesim ve satin alma ile balanced seviyesine gec.
@@ -220,9 +223,12 @@ class SystemJourneyTestCase(APITestCase):
         weights = recommendation_response.data["ml_metrics"]["weights_used"]
         self.assertEqual(weights["user_tier"], "balanced")
         self.assertEqual(weights["interaction_count"], 5)
-        self.assertEqual(weights["ncf"], 0.4)
-        self.assertEqual(weights["content"], 0.3)
-        self.assertEqual(weights["popularity"], 0.3)
+        # balanced tier (4 kule): mf=0.25, item_item=0.30, content=0.30, popularity=0.15.
+        self.assertEqual(weights["mf"], 0.25)
+        self.assertEqual(weights["item_item"], 0.30)
+        self.assertEqual(weights["content"], 0.30)
+        self.assertEqual(weights["popularity"], 0.15)
+        self.assertEqual(weights["ncf"], 0.25)  # geriye donuk uyumluluk = MF
 
         self.assertEqual(ViewHistory.objects.filter(customer=user).count(), 4)
         self.assertTrue(

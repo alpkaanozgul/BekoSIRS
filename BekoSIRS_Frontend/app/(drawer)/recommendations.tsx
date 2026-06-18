@@ -326,16 +326,14 @@ const RecommendationsScreen = () => {
           onPress={() => handleProductClick(item)}
           activeOpacity={0.7}
         >
-          {/* Kart basligi sira ve toplam skoru ayni satirda gosterir. */}
+          {/* Kart basligi: sira rozeti ve insancil eslesme etiketi.
+              Ham skor (ornegin 0.347) musteri icin anlamsiz oldugundan gosterilmez. */}
           <View style={styles.cardHeader}>
             <View style={styles.rankContainer}>
               <Text style={styles.rankText}>{getRankEmoji(index)}</Text>
             </View>
             <View style={styles.scoreContainer}>
               <Text style={[styles.scoreLabel, { color: scoreColor }]}>{scoreLabel}</Text>
-              <Text style={[styles.scoreValue, { color: scoreColor }]}>
-                {item.score.toFixed(3)}
-              </Text>
             </View>
           </View>
 
@@ -361,24 +359,12 @@ const RecommendationsScreen = () => {
                 <Text style={styles.brand}>{product.brand}</Text>
               ) : null}
               
-              {/* Neden etiketi, urunun neden listede oldugunu kisaca aciklar. */}
+              {/* Neden etiketi, urunun neden onerildigini insancil bir dille aciklar
+                  (ornegin "X alanlar bunu da aldi" / "incelemenize benzer"). Ham model
+                  skorlari ve kule kirilimi musteriye gosterilmez. */}
               <View style={styles.reasonChip}>
                 <FontAwesome name="lightbulb-o" size={12} color="#7B1FA2" />
                 <Text style={styles.reasonText}>{item.reason}</Text>
-              </View>
-
-              {/* Skor dokumu toplam skoru aktif agirliklara gore yaklasik parcaliyor.
-                  Ornek: toplam skor 0.90 ve NCF agirligi 0.40 ise NCF katkisi 0.36 gorunur. */}
-              <View style={styles.scoreBreakdown}>
-                <Text style={styles.scoreBreakdownItem}>
-                  NCF: {(item.score * (activeWeights.ncf ?? 0)).toFixed(2)}
-                </Text>
-                <Text style={styles.scoreBreakdownItem}>
-                  İçerik: {(item.score * (activeWeights.content ?? 0)).toFixed(2)}
-                </Text>
-                <Text style={styles.scoreBreakdownItem}>
-                  Popülerlik: {(item.score * (activeWeights.popularity ?? 0)).toFixed(2)}
-                </Text>
               </View>
 
               <View style={styles.priceRow}>

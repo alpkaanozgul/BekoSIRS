@@ -16,7 +16,12 @@ User = get_user_model()
 
 
 class _NCFStub:
-    """recommend() cagrisi icerik odakli senaryolarda calissin diye minimal NCF stub'i."""
+    """recommend() cagrisi icerik odakli senaryolarda calissin diye minimal CF stub'i.
+
+    Hem Matrix Factorization (self.ncf) hem Item-Item CF (self.itemitem) kulesi
+    icin kullanilir; is_trained=False oldugundan ilgili skor bloklari atlanir ve
+    test deterministik sekilde yalnizca content kulesini olcer.
+    """
 
     is_trained = False
 
@@ -49,6 +54,7 @@ def _build_recommender(content):
     recommender = object.__new__(HybridRecommender)
     recommender.content = content
     recommender.ncf = _NCFStub()
+    recommender.itemitem = _NCFStub()  # Item-Item CF kulesi de devre disi → content odakli test.
     recommender._last_runtime_weights = {}
     recommender._get_popularity_scores = lambda: {}
     recommender._get_search_boosts = lambda user: {}
