@@ -21,11 +21,13 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         data = super().validate(attrs)
 
         request = self.context.get("request")
-        platform = request.data.get("platform", "web") if request else "web"
+        
+        # In DRF serializers, you can access the initial incoming data directly
+        platform = self.initial_data.get("platform", "web")
         role = str(self.user.role).lower()
 
         if platform == "mobile":
-            # Mobile app is customer-only
+            # Mobile app is for customers and delivery drivers
             if role in ["admin", "seller"]:
                 raise exceptions.PermissionDenied(
                     "Yetkisiz Erişim: Yönetici ve satıcı hesapları mobil uygulamaya giremez."

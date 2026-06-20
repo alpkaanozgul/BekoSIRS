@@ -12,6 +12,10 @@ from products.ml_sales_forecaster import get_sales_forecaster
 LEAD_TIME_MONTHS = 1.0      # Tedarikçiden malın gelme süresi (ay)
 SAFETY_STOCK_DAYS = 7       # Tedarik süresi boyunca tükenmeye karşı güvenlik tamponu (gün)
 
+# Uyarı eşikleri (gün cinsinden)
+CRITICAL_DAYS = 7    # 7 günden az kaldıysa → Kritik
+WARNING_DAYS  = 30   # 30 günden az kaldıysa → Uyarı
+
 
 def _ym_minus(year: int, month: int, k: int):
     """year-month'tan k ay geriye gider, (yıl, ay) döndürür."""
@@ -20,7 +24,7 @@ def _ym_minus(year: int, month: int, k: int):
 
 
 class StockIntelligenceDashboardView(views.APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         now = timezone.now()
@@ -112,25 +116,64 @@ class StockIntelligenceDashboardView(views.APIView):
                 "recommended_order_qty": recommended_order_qty,
             }
 
-            if p.stock <= 5:
+            # ── Sınıflandırma ──
+            # Kritik: stok tamamen bitti VEYA aktif satışla birlikte 5 ve altı
+            # VEYA satış hızıyla CRITICAL_DAYS günden az ömrü kaldı.
+            # Sadece "stok az ama satış yok" durumu kritik değil — yanlış alarm üretir.
+            is_critical = (
+                p.stock == 0
+                or (p.stock <= 5 and velocity > 0)
+                or (days_until_stockout is not None and days_until_stockout < CRITICAL_DAYS)
+            )
+
+            # Uyarı: kritik değil ama WARNING_DAYS günden az ömrü var.
+            # Stok sayısından bağımsız: 100 birim bile günde 50 satılıyorsa uyarı alır.
+            is_warning = (
+                not is_critical
+                and days_until_stockout is not None
+                and days_until_stockout < WARNING_DAYS
+            )
+
+            # Fırsat: fazla stok + yavaş hareket (satış var ama düşük → kampanya).
+            # Ölü stok (hiç satış yok) farklı mesajla ayrı gösterilir.
+            is_opportunity = (
+                not is_critical
+                and not is_warning
+                and p.stock >= 20
+                and velocity < 0.2
+            )
+
+            if is_critical:
+                if p.stock == 0:
+                    msg = "Out of stock, immediate order required."
+                elif days_until_stockout is not None and days_until_stockout < CRITICAL_DAYS:
+                    msg = f"Will be out of stock in {int(days_until_stockout)} days at current sales velocity."
+                else:
+                    msg = "Stock is at a critical level, urgent action needed."
                 critical_alerts.append({
                     **alert_data,
                     "urgency": "critical",
-                    "message": "Stok kritik seviyede, acil müdahale gerekli.",
+                    "message": msg,
                     "estimated_order_cost": est_cost,
                 })
-            elif p.stock <= 15 and velocity > 0 and days_until_stockout and days_until_stockout < 30:
+            elif is_warning:
                 warning_alerts.append({
                     **alert_data,
                     "urgency": "warning",
-                    "message": f"Mevcut satış hızıyla {int(days_until_stockout)} gün içinde tükenecek.",
+                    "message": f"Will be out of stock in {int(days_until_stockout)} days at current sales velocity.",
                     "estimated_order_cost": est_cost,
                 })
-            elif p.stock >= 20 and velocity < 0.2:
+            elif is_opportunity:
+                if velocity == 0:
+                    opp_msg = "No sales in the last 30 days. Consider reviewing price or launching a campaign."
+                    opp_urgency = "dead_stock"
+                else:
+                    opp_msg = "High idle stock. Launching a campaign could be beneficial."
+                    opp_urgency = "opportunity"
                 opportunities.append({
                     **alert_data,
-                    "urgency": "opportunity",
-                    "message": "Yüksek atıl stok. Bir kampanya düzenlenmesi yararlı olabilir.",
+                    "urgency": opp_urgency,
+                    "message": opp_msg,
                 })
             else:
                 healthy_count += 1
